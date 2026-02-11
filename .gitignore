@@ -12,4 +12,5 @@ data/monthly_data/**/*.json
 data/monthly_data/**/*.csv
 output/**/*.xlsx
 output/**/*.pdf
+output/**/*.csv
 logs/*.log

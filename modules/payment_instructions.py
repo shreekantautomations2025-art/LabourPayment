@@ -107,11 +107,12 @@ def generate_payment_instructions(
     story.append(Paragraph("<b>4) Bank Salary Payment Instructions</b>", styles["Heading3"]))
     bank_lines = [
         f"STEP 1: Download Bank_Payment_{month_short_name(month)}_{year}.xlsx",
-        "STEP 2: Open your bank bulk upload portal (NEFT/RTGS)",
-        "STEP 3: Upload NEFT_Upload sheet or copy approved format",
-        f"STEP 4: Verify total amount: {_money(summary_data.get('net_payable', 0))}",
-        "STEP 5: Authorize and complete payment",
-        "STEP 6: Save transaction reference",
+        f"STEP 2: Download NACH_Upload_{month_short_name(month)}_{year}.csv (if your bank supports NACH/ACH CSV).",
+        "STEP 3: Open your bank bulk upload portal (NEFT/RTGS/NACH)",
+        "STEP 4: Upload NEFT_Upload sheet or NACH CSV as per bank requirement",
+        f"STEP 5: Verify total amount: {_money(summary_data.get('net_payable', 0))}",
+        "STEP 6: Authorize and complete payment",
+        "STEP 7: Save transaction reference",
         f"Total Employees: {int(summary_data.get('employee_count', 0))}",
     ]
     for line in bank_lines:

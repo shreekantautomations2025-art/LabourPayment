@@ -11,7 +11,12 @@ from openpyxl.formatting.rule import CellIsRule
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
-from config import OUTPUT_DIR
+from config import (
+    NACH_ACCOUNT_TYPE,
+    NACH_CREDIT_NARRATION_PREFIX,
+    NACH_DEBIT_NARRATION,
+    OUTPUT_DIR,
+)
 from modules.statutory_calculator import get_pt_slab_label, split_employer_pf
 from modules.wage_calculator import build_department_summary
 from utils.date_utils import month_short_name, next_month_due_date
@@ -234,10 +239,71 @@ def generate_bank_payment_excel(employee_wages: Iterable[dict], month: int, year
     for r in range(2, neft.max_row + 1):
         neft.cell(r, 5).number_format = '#,##0.00'
 
+    nach = wb.create_sheet("NACH_Upload")
+    nach_cols = [
+        "S.No",
+        "Beneficiary Name",
+        "Account Number",
+        "Account Type",
+        "IFSC",
+        "Amount",
+        "Debit Narration",
+        "Credit Narration",
+        "Mobile",
+        "Email",
+    ]
+    nach.append(nach_cols)
+    for idx, row in enumerate(rows, start=1):
+        nach.append(
+            [
+                idx,
+                row.get("emp_name", ""),
+                row.get("bank_account_no", ""),
+                NACH_ACCOUNT_TYPE,
+                row.get("ifsc_code", ""),
+                _currency(row.get("net_payable", 0)),
+                NACH_DEBIT_NARRATION,
+                f"{NACH_CREDIT_NARRATION_PREFIX} {month_short_name(month)}-{year}",
+                row.get("mobile", ""),
+                row.get("email", ""),
+            ]
+        )
+    _style_header(nach, 1)
+    _style_table(nach, 1, nach.max_row, len(nach_cols))
+    nach.auto_filter.ref = f"A1:J{nach.max_row}"
+    nach.freeze_panes = "A2"
+    for r in range(2, nach.max_row + 1):
+        nach.cell(r, 6).number_format = '#,##0.00'
+
     _auto_fit_columns(ws)
     _auto_fit_columns(neft)
+    _auto_fit_columns(nach)
     out_path = _output_dir(month, year, output_dir) / f"Bank_Payment_{month_short_name(month)}_{year}.xlsx"
     wb.save(out_path)
+    return out_path
+
+
+def generate_nach_upload_csv(employee_wages: Iterable[dict], month: int, year: int, output_dir: Path | None = None) -> Path:
+    """Generate bank-friendly NACH/ACH CSV export."""
+    rows = list(employee_wages)
+    payload = []
+    for idx, row in enumerate(rows, start=1):
+        payload.append(
+            {
+                "SNo": idx,
+                "BeneficiaryName": row.get("emp_name", ""),
+                "AccountNumber": row.get("bank_account_no", ""),
+                "AccountType": NACH_ACCOUNT_TYPE,
+                "IFSC": row.get("ifsc_code", ""),
+                "Amount": _currency(row.get("net_payable", 0)),
+                "DebitNarration": NACH_DEBIT_NARRATION,
+                "CreditNarration": f"{NACH_CREDIT_NARRATION_PREFIX} {month_short_name(month)}-{year}",
+                "Mobile": row.get("mobile", ""),
+                "Email": row.get("email", ""),
+            }
+        )
+    out_path = _output_dir(month, year, output_dir) / f"NACH_Upload_{month_short_name(month)}_{year}.csv"
+    pd.DataFrame(payload).to_csv(out_path, index=False)
     return out_path
 
 
@@ -308,6 +374,34 @@ def generate_pf_summary(employee_wages: Iterable[dict], month: int, year: int, o
 
     out_path = _output_dir(month, year, output_dir) / f"PF_Summary_{month_short_name(month)}_{year}.xlsx"
     wb.save(out_path)
+    return out_path
+
+
+def generate_pf_ecr_file(employee_wages: Iterable[dict], month: int, year: int, output_dir: Path | None = None) -> Path:
+    """Generate EPFO ECR-ready CSV file for statutory upload."""
+    rows = list(employee_wages)
+    payload = []
+    for row in rows:
+        basic = _currency(row.get("pf_basic", row.get("basic_wages", 0)))
+        employee_pf = _currency(row.get("pf_employee", 0))
+        employer_epf, employer_eps = split_employer_pf(basic)
+        payload.append(
+            {
+                "UAN": row.get("uan_no", ""),
+                "MemberName": row.get("emp_name", ""),
+                "GrossWages": _currency(row.get("gross_salary", 0)),
+                "EPFWages": basic,
+                "EPSWages": basic,
+                "EDLIWages": basic,
+                "NCPDays": 0,
+                "RefundOfAdvances": 0,
+                "EPFContributionRemitted": employee_pf,
+                "EPSContributionRemitted": employer_eps,
+                "EPFContributionEmployerShare": employer_epf,
+            }
+        )
+    out_path = _output_dir(month, year, output_dir) / f"PF_ECR_{month_short_name(month)}_{year}.csv"
+    pd.DataFrame(payload).to_csv(out_path, index=False)
     return out_path
 
 

@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from modules.employee_manager import EmployeeManager
-from modules.payroll_processor import process_monthly_payroll
+from modules.payroll_processor import create_payroll_preview, finalize_payroll_from_preview, process_monthly_payroll
 
 
 def _add_test_employees(manager: EmployeeManager) -> None:
@@ -83,4 +83,43 @@ def test_full_monthly_processing(tmp_path):
     assert result["totals"]["gross_salary"] > 0
     for _, file_path in result["output_paths"].items():
         assert Path(file_path).exists()
+
+    assert Path(result["output_paths"]["pf_ecr_csv"]).suffix == ".csv"
+    assert Path(result["output_paths"]["nach_upload_csv"]).suffix == ".csv"
+
+
+def test_preview_and_finalize_flow(tmp_path):
+    manager = EmployeeManager(tmp_path / "employees.db")
+    _add_test_employees(manager)
+    muster_file = _create_sample_muster(tmp_path / "muster_preview.xlsx")
+
+    preview = create_payroll_preview(
+        muster_file=muster_file,
+        month=8,
+        year=2025,
+        employee_manager=manager,
+        output_dir=tmp_path / "output_preview",
+    )
+    preview_file = Path(preview["preview_file"])
+    assert preview_file.exists()
+
+    editable = pd.read_excel(preview_file, sheet_name="Editable_Preview")
+    editable.loc[0, "approved"] = "N"
+    editable.loc[1, "ot_hours"] = 30
+    edited_file = tmp_path / "edited_preview.xlsx"
+    with pd.ExcelWriter(edited_file, engine="openpyxl") as writer:
+        editable.to_excel(writer, sheet_name="Editable_Preview", index=False)
+        pd.DataFrame([{"Instruction": "edited"}]).to_excel(writer, sheet_name="Instructions", index=False)
+
+    final = finalize_payroll_from_preview(
+        preview_file=edited_file,
+        month=8,
+        year=2025,
+        employee_manager=manager,
+        output_dir=tmp_path / "output_final",
+        require_approved_rows=True,
+    )
+    assert final["employee_count"] == 1
+    assert final["totals"]["gross_salary"] > 0
+    assert Path(final["output_paths"]["pf_ecr_csv"]).exists()
 

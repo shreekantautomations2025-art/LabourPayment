@@ -38,8 +38,10 @@ Production-grade Python payroll automation for Indian labour contractors with:
 - Department salary summary (`.xlsx`)
 - MD invoice (`.pdf`)
 - OT invoice (`.pdf`)
-- Bank payment sheet + NEFT sheet (`.xlsx`)
+- Bank payment sheet + NEFT + NACH sheets (`.xlsx`)
+- NACH upload file (`.csv`)
 - PF summary (`.xlsx`)
+- PF ECR upload file (`.csv`)
 - ESIC summary (`.xlsx`)
 - PT summary (`.xlsx`)
 - Advance register (`.xlsx`)
@@ -140,7 +142,28 @@ For non-interactive runs:
 python main.py process-payroll --muster-file <file> --month 11 --year 2025 --yes
 ```
 
-### 4) Interactive Menu
+### 4) Preview -> Approve -> Finalize Flow (recommended)
+Create editable preview:
+```bash
+python main.py process-payroll \
+  --muster-file input/muster_rolls/Shankar_Patil_MusterRoll_Nov_2025_updated_1.xlsx \
+  --month 11 \
+  --year 2025 \
+  --preview-only
+```
+
+Then edit `Payroll_Preview_YYYY_MM.xlsx` and set `approved` column (`Y` / `N`), adjust days/OT/deductions.
+
+Finalize from edited preview:
+```bash
+python main.py finalize-payroll \
+  --preview-file output/2025_11/Payroll_Preview_2025_11.xlsx \
+  --month 11 \
+  --year 2025 \
+  --yes
+```
+
+### 5) Interactive Menu
 ```bash
 python main.py
 ```
@@ -175,6 +198,8 @@ Included tests:
 - Wage/statutory unit tests
 - Employee CRUD tests
 - End-to-end monthly processing integration test
+- Preview/finalize integration test
+- Optional real sample muster regression test (auto-skips if sample file is absent)
 
 ---
 

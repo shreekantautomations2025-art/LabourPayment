@@ -68,6 +68,11 @@ DEFAULT_CURRENCY = "INR"
 DATE_FORMAT = "%d-%b-%Y"
 SUPPORTED_DESIGNATIONS = {"labour", "unskilled", "semi-skilled", "semiskilled", "supervisor"}
 
+# Bank Upload Settings
+NACH_ACCOUNT_TYPE = "SB"
+NACH_DEBIT_NARRATION = "Salary Debit"
+NACH_CREDIT_NARRATION_PREFIX = "Salary"
+
 # Storage
 EMPLOYEE_DB_PATH = DATA_DIR / "employees_master.db"
 ADVANCES_PATH = DATA_DIR / "advances" / "advances.xlsx"

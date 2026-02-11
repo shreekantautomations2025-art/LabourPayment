@@ -9,7 +9,7 @@ from typing import Any, Dict
 
 from modules.employee_manager import EmployeeManager
 from modules.muster_parser import parse_muster_roll
-from modules.payroll_processor import process_monthly_payroll
+from modules.payroll_processor import create_payroll_preview, finalize_payroll_from_preview, process_monthly_payroll
 from modules.validators import validate_muster_roll
 from utils.date_utils import parse_month_year
 from utils.helpers import ensure_base_directories, setup_logging
@@ -94,6 +94,20 @@ def handle_employee_command(args: argparse.Namespace, manager: EmployeeManager) 
 
 def handle_payroll_process(args: argparse.Namespace, manager: EmployeeManager) -> int:
     month, year = parse_month_year(args.month, args.year)
+    if args.preview_only:
+        preview_result = create_payroll_preview(
+            muster_file=args.muster_file,
+            month=month,
+            year=year,
+            employee_manager=manager,
+            adjustments_file=args.adjustments_file,
+        )
+        print("\nPreview generated successfully. Edit and approve rows before finalization.")
+        print(json.dumps(preview_result, indent=2))
+        print("\nFinalize command:")
+        print(f"python main.py finalize-payroll --preview-file \"{preview_result['preview_file']}\" --month {month} --year {year}")
+        return 0
+
     parsed_df = parse_muster_roll(args.muster_file, employee_manager=manager)
     master_rows = manager.get_all_employees(active_only=True)
     master_codes = {r["emp_code"] for r in master_rows}
@@ -132,6 +146,26 @@ def handle_payroll_process(args: argparse.Namespace, manager: EmployeeManager) -
     return 0
 
 
+def handle_finalize_payroll(args: argparse.Namespace, manager: EmployeeManager) -> int:
+    month, year = parse_month_year(args.month, args.year)
+    if not args.yes:
+        confirm = input("Finalize payroll from edited preview file? (y/n): ").strip().lower()
+        if confirm not in {"y", "yes"}:
+            print("Finalize operation cancelled by user.")
+            return 0
+
+    response = finalize_payroll_from_preview(
+        preview_file=args.preview_file,
+        month=month,
+        year=year,
+        employee_manager=manager,
+        require_approved_rows=True,
+    )
+    print("\nPayroll finalized from preview.")
+    print(json.dumps(response, indent=2))
+    return 0
+
+
 def run_interactive_menu(manager: EmployeeManager) -> int:
     while True:
         print(
@@ -139,7 +173,9 @@ def run_interactive_menu(manager: EmployeeManager) -> int:
             "=======================================\n"
             "1. View All Employees\n"
             "2. Bulk Upload Employees\n"
-            "3. Process Monthly Payroll\n"
+            "3. Process Monthly Payroll (direct)\n"
+            "4. Create Payroll Preview (review mode)\n"
+            "5. Finalize Payroll from Preview\n"
             "0. Exit\n"
         )
         choice = input("Select option: ").strip()
@@ -164,6 +200,24 @@ def run_interactive_menu(manager: EmployeeManager) -> int:
             month = int(input("Enter month (1-12): ").strip())
             year = int(input("Enter year (e.g. 2025): ").strip())
             res = process_monthly_payroll(muster_file=muster, month=month, year=year, employee_manager=manager)
+            print(json.dumps(res, indent=2))
+        elif choice == "4":
+            muster = input("Enter muster roll excel file path: ").strip()
+            month = int(input("Enter month (1-12): ").strip())
+            year = int(input("Enter year (e.g. 2025): ").strip())
+            res = create_payroll_preview(muster_file=muster, month=month, year=year, employee_manager=manager)
+            print(json.dumps(res, indent=2))
+        elif choice == "5":
+            preview_file = input("Enter edited preview file path: ").strip()
+            month = int(input("Enter month (1-12): ").strip())
+            year = int(input("Enter year (e.g. 2025): ").strip())
+            res = finalize_payroll_from_preview(
+                preview_file=preview_file,
+                month=month,
+                year=year,
+                employee_manager=manager,
+                require_approved_rows=True,
+            )
             print(json.dumps(res, indent=2))
         else:
             print("Invalid option.")
@@ -243,7 +297,14 @@ def build_parser() -> argparse.ArgumentParser:
     payroll.add_argument("--month", required=True, type=int)
     payroll.add_argument("--year", required=True, type=int)
     payroll.add_argument("--adjustments-file")
+    payroll.add_argument("--preview-only", action="store_true", help="Create editable preview and stop")
     payroll.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
+
+    finalize = subparsers.add_parser("finalize-payroll", help="Finalize payroll from edited preview workbook")
+    finalize.add_argument("--preview-file", required=True)
+    finalize.add_argument("--month", required=True, type=int)
+    finalize.add_argument("--year", required=True, type=int)
+    finalize.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
 
     return parser
 
@@ -270,6 +331,9 @@ def main() -> int:
 
         if args.command == "process-payroll":
             return handle_payroll_process(args, manager)
+
+        if args.command == "finalize-payroll":
+            return handle_finalize_payroll(args, manager)
 
         parser.print_help()
         return 1
