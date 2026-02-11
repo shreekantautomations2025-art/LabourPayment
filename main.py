@@ -108,6 +108,7 @@ def handle_payroll_process(args: argparse.Namespace, manager: EmployeeManager) -
             employee_manager=manager,
             company_id=args.company_id,
             adjustments_file=args.adjustments_file,
+            allow_auto_employee_creation=not args.strict_master,
         )
         print("\nPreview generated successfully. Edit and approve rows before finalization.")
         print(json.dumps(preview_result, indent=2))
@@ -149,6 +150,7 @@ def handle_payroll_process(args: argparse.Namespace, manager: EmployeeManager) -
         company_id=args.company_id,
         adjustments_file=args.adjustments_file,
         require_clean_validation=True,
+        allow_auto_employee_creation=not args.strict_master,
     )
     print("\nProcessing complete.")
     print(json.dumps(response, indent=2))
@@ -170,6 +172,7 @@ def handle_finalize_payroll(args: argparse.Namespace, manager: EmployeeManager) 
         employee_manager=manager,
         company_id=args.company_id,
         require_approved_rows=True,
+        allow_auto_employee_creation=not args.strict_master,
     )
     print("\nPayroll finalized from preview.")
     print(json.dumps(response, indent=2))
@@ -297,7 +300,7 @@ def build_parser() -> argparse.ArgumentParser:
     list_cmd.add_argument("--include-inactive", action="store_true")
     list_cmd.add_argument("--company-id", type=int)
 
-    bulk = emp_sub.add_parser("bulk-upload", help="Bulk upload from excel")
+    bulk = emp_sub.add_parser("bulk-upload", help="Bulk upload from xlsx/xls/csv/json/txt/pdf")
     bulk.add_argument("--file", required=True)
     bulk.add_argument("--company-id", type=int, help="Assign uploaded employees to company ID")
 
@@ -312,6 +315,11 @@ def build_parser() -> argparse.ArgumentParser:
     payroll.add_argument("--company-id", type=int, help="Process payroll for selected company")
     payroll.add_argument("--adjustments-file")
     payroll.add_argument("--preview-only", action="store_true", help="Create editable preview and stop")
+    payroll.add_argument(
+        "--strict-master",
+        action="store_true",
+        help="Require employee to already exist in master; disable auto creation",
+    )
     payroll.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
 
     finalize = subparsers.add_parser("finalize-payroll", help="Finalize payroll from edited preview workbook")
@@ -319,6 +327,11 @@ def build_parser() -> argparse.ArgumentParser:
     finalize.add_argument("--month", required=True, type=int)
     finalize.add_argument("--year", required=True, type=int)
     finalize.add_argument("--company-id", type=int, help="Finalize payroll for selected company")
+    finalize.add_argument(
+        "--strict-master",
+        action="store_true",
+        help="Require employee to already exist in master; disable auto creation",
+    )
     finalize.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
 
     return parser

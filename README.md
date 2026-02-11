@@ -37,6 +37,7 @@ Production-grade Python payroll automation for Indian labour contractors with:
 - Skip time rows in two-row attendance structure
 - Extract present days and OT hours
 - Validate employee codes against master data
+- Auto-create/reactivate missing employees from muster/preview (durable mode)
 - Generate preview before finalization (CLI flow)
 
 ### Wage & Compliance Calculations
@@ -155,6 +156,7 @@ Bulk upload:
 ```bash
 python main.py employee bulk-upload --file input/employee_master.xlsx
 ```
+Supported bulk formats: `xlsx`, `xls`, `csv`, `json`, `txt`, `pdf` (table text extraction).
 
 List employees:
 ```bash
@@ -173,6 +175,11 @@ python main.py process-payroll \
 For non-interactive runs:
 ```bash
 python main.py process-payroll --muster-file <file> --month 11 --year 2025 --yes
+```
+
+To force strict mode (do not auto-create missing employees):
+```bash
+python main.py process-payroll --muster-file <file> --month 11 --year 2025 --strict-master
 ```
 
 ### 4) Preview -> Approve -> Finalize Flow (recommended)
@@ -195,6 +202,11 @@ python main.py finalize-payroll \
   --year 2025 \
   --company-id 1 \
   --yes
+```
+
+Finalize with strict master mode:
+```bash
+python main.py finalize-payroll --preview-file <preview.xlsx> --month 11 --year 2025 --strict-master --yes
 ```
 
 ### 5) Interactive Menu

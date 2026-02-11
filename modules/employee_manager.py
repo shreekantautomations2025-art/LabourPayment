@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -301,26 +303,34 @@ class EmployeeManager:
     def _normalize_bulk_columns(df: pd.DataFrame) -> pd.DataFrame:
         mapping = {
             "emp code": "emp_code",
+            "empcode": "emp_code",
             "employee code": "emp_code",
             "name": "emp_name",
+            "empname": "emp_name",
             "employee name": "emp_name",
             "father/husband name": "father_husband_name",
+            "fatherhusbandname": "father_husband_name",
             "father name": "father_husband_name",
             "dob": "dob",
             "gender": "gender",
             "designation": "designation",
             "doj": "doj",
             "bank account": "bank_account_no",
+            "bankaccount": "bank_account_no",
             "bank account no": "bank_account_no",
             "ifsc": "ifsc_code",
             "ifsc code": "ifsc_code",
+            "ifsccode": "ifsc_code",
             "bank name": "bank_name",
             "pan": "pan_no",
             "aadhaar": "aadhaar_no",
             "uan": "uan_no",
             "esic no": "esic_no",
             "esic number": "esic_no",
+            "esicno": "esic_no",
             "department": "department",
+            "company id": "company_id",
+            "companyid": "company_id",
         }
 
         normalized_cols = {}
@@ -329,14 +339,113 @@ class EmployeeManager:
             normalized_cols[col] = mapping.get(key, key.replace(" ", "_"))
         return df.rename(columns=normalized_cols)
 
+    @staticmethod
+    def _parse_text_table(text: str) -> pd.DataFrame:
+        lines = [ln.strip() for ln in text.splitlines() if ln and ln.strip()]
+        if not lines:
+            raise ValueError("No readable text found in file")
+
+        header_idx = 0
+        for idx, line in enumerate(lines):
+            low = line.lower()
+            if "emp" in low and ("code" in low or "name" in low):
+                header_idx = idx
+                break
+
+        header_line = lines[header_idx]
+        delimiters = ["|", "\t", ",", ";"]
+        for delim in delimiters:
+            if header_line.count(delim) < 2:
+                continue
+            headers = [h.strip() for h in header_line.split(delim)]
+            rows = []
+            for line in lines[header_idx + 1 :]:
+                if delim not in line:
+                    continue
+                parts = [p.strip() for p in line.split(delim)]
+                if len(parts) < len(headers):
+                    parts.extend([""] * (len(headers) - len(parts)))
+                rows.append(parts[: len(headers)])
+            if rows:
+                return pd.DataFrame(rows, columns=headers)
+
+        # Fallback: split by repeated spaces
+        header_parts = [p.strip() for p in re.split(r"\s{2,}", header_line) if p.strip()]
+        if len(header_parts) >= 3:
+            rows = []
+            for line in lines[header_idx + 1 :]:
+                parts = [p.strip() for p in re.split(r"\s{2,}", line) if p.strip()]
+                if not parts:
+                    continue
+                if len(parts) < len(header_parts):
+                    parts.extend([""] * (len(header_parts) - len(parts)))
+                rows.append(parts[: len(header_parts)])
+            if rows:
+                return pd.DataFrame(rows, columns=header_parts)
+
+        raise ValueError("Unable to parse tabular employee data from file")
+
+    def _load_bulk_dataframe(self, file_path: Path) -> pd.DataFrame:
+        suffix = file_path.suffix.lower()
+
+        if suffix in {".xlsx", ".xls"}:
+            return pd.read_excel(file_path)
+
+        if suffix in {".csv"}:
+            return pd.read_csv(file_path)
+
+        if suffix in {".txt"}:
+            raw_text = file_path.read_text(encoding="utf-8", errors="ignore")
+            first_line = next((ln for ln in raw_text.splitlines() if ln.strip()), "")
+            if "|" in first_line and first_line.count("|") >= 2:
+                return pd.read_csv(file_path, sep="|")
+            if "\t" in first_line and first_line.count("\t") >= 2:
+                return pd.read_csv(file_path, sep="\t")
+            try:
+                return pd.read_csv(file_path, sep=None, engine="python")
+            except Exception:
+                return self._parse_text_table(raw_text)
+
+        if suffix in {".json"}:
+            raw = json.loads(file_path.read_text(encoding="utf-8"))
+            if isinstance(raw, list):
+                return pd.DataFrame(raw)
+            if isinstance(raw, dict):
+                if isinstance(raw.get("employees"), list):
+                    return pd.DataFrame(raw["employees"])
+                return pd.DataFrame([raw])
+            raise ValueError("Unsupported JSON structure for bulk employee upload")
+
+        if suffix in {".pdf"}:
+            try:
+                from pypdf import PdfReader
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError("PDF upload requires 'pypdf' dependency") from exc
+            reader = PdfReader(str(file_path))
+            text = "\n".join((page.extract_text() or "") for page in reader.pages)
+            if not text.strip():
+                raise ValueError("No extractable text found in PDF")
+            return self._parse_text_table(text)
+
+        # Best-effort fallback for any other extension.
+        try:
+            return pd.read_csv(file_path, sep=None, engine="python")
+        except Exception:
+            text = file_path.read_text(encoding="utf-8", errors="ignore")
+            return self._parse_text_table(text)
+
     def bulk_upload_employees(self, excel_file: str | Path, company_id: int | None = None) -> Dict[str, Any]:
-        """Bulk upload employee records from excel file."""
+        """Bulk upload employee records from xlsx/xls/csv/json/txt/pdf."""
         file_path = Path(excel_file)
         if not file_path.exists():
             return {"success": 0, "failed": 0, "errors": [f"File not found: {file_path}"]}
 
         backup_file(self.db_path, self.db_path.parent / "backups")
-        df = pd.read_excel(file_path)
+        try:
+            df = self._load_bulk_dataframe(file_path)
+        except Exception as exc:  # noqa: BLE001
+            return {"success": 0, "failed": 0, "errors": [f"Unable to parse file '{file_path.name}': {exc}"]}
+
         df = self._normalize_bulk_columns(df)
         records = df.to_dict(orient="records")
 

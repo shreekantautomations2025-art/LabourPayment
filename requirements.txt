@@ -5,5 +5,7 @@ fpdf2>=2.7.0
 python-dateutil>=2.8.0
 num2words>=0.5.12
 cryptography>=44.0.0
+pypdf>=5.0.0
 streamlit>=1.30.0
 pytest>=8.0.0
+pypdf>=5.0.0

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import math
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
@@ -29,6 +31,10 @@ from modules.pdf_generator import generate_ot_register_pdf, generate_wages_regis
 from modules.validators import validate_muster_roll
 from modules.wage_calculator import build_department_summary, calculate_batch_wages
 from utils.helpers import copy_original_muster, get_period_directories, log_audit
+
+_IFSC_RE = re.compile(r"^[A-Z]{4}0[A-Z0-9]{6}$")
+_DEFAULT_IFSC = "SBIN0000001"
+_DEFAULT_ACCOUNT = "000000000"
 
 
 def _load_adjustments(adjustments_file: str | Path | None) -> tuple[dict, dict]:
@@ -109,6 +115,135 @@ def _clean_text(value: object) -> str:
     if isinstance(value, float) and math.isnan(value):
         return ""
     return str(value).strip()
+
+
+def _normalize_bank_account(value: object) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if 9 <= len(digits) <= 18:
+        return digits
+    if len(digits) > 18:
+        return digits[:18]
+    return _DEFAULT_ACCOUNT
+
+
+def _normalize_ifsc(value: object) -> str:
+    text = str(value or "").strip().upper()
+    return text if _IFSC_RE.match(text) else _DEFAULT_IFSC
+
+
+def _normalize_designation(value: object) -> str:
+    text = _clean_text(value).lower()
+    if "supervisor" in text:
+        return "Supervisor"
+    if "semi" in text:
+        return "Semi-Skilled"
+    return "Labour"
+
+
+def _build_auto_employee_payload(record: dict, company_id: int | None) -> dict:
+    emp_code = _clean_text(record.get("emp_code"))
+    return {
+        "emp_code": emp_code,
+        "emp_name": _clean_text(record.get("emp_name")) or "Unknown Employee",
+        "father_husband_name": _clean_text(record.get("father_husband_name")) or "Unknown",
+        "dob": _clean_text(record.get("dob")) or "1990-01-01",
+        "gender": _clean_text(record.get("gender")) or "Male",
+        "designation": _normalize_designation(record.get("designation") or record.get("grade")),
+        "doj": _clean_text(record.get("doj")) or datetime.now().date().isoformat(),
+        "bank_account_no": _normalize_bank_account(record.get("bank_account_no")),
+        "ifsc_code": _normalize_ifsc(record.get("ifsc_code")),
+        "bank_name": _clean_text(record.get("bank_name")) or "UNKNOWN BANK",
+        "pan_no": _clean_text(record.get("pan_no")),
+        "aadhaar_no": _clean_text(record.get("aadhaar_no")),
+        "uan_no": _clean_text(record.get("uan_no")),
+        "esic_no": _clean_text(record.get("esic_no")),
+        "department": _clean_text(record.get("department")),
+        "company_id": company_id,
+    }
+
+
+def _reactivate_employee(manager: EmployeeManager, emp_code: str, company_id: int | None) -> None:
+    with manager._connect() as conn:  # pylint: disable=protected-access
+        if company_id is None:
+            conn.execute(
+                "UPDATE employees SET is_active = 1, updated_date = ? WHERE emp_code = ?",
+                (datetime.now().isoformat(timespec="seconds"), emp_code),
+            )
+        else:
+            conn.execute(
+                "UPDATE employees SET is_active = 1, updated_date = ? WHERE emp_code = ? AND company_id = ?",
+                (datetime.now().isoformat(timespec="seconds"), emp_code, int(company_id)),
+            )
+        conn.commit()
+
+
+def _ensure_employee_in_master(
+    manager: EmployeeManager,
+    record: dict,
+    company_id: int | None,
+    allow_auto_employee_creation: bool,
+) -> dict | None:
+    emp_code = _clean_text(record.get("emp_code"))
+    if not emp_code:
+        return None
+
+    def _sync_company(employee: dict | None) -> dict | None:
+        if employee is None:
+            return None
+        if company_id is None:
+            return employee
+        current_company = employee.get("company_id")
+        if current_company is None or int(current_company) != int(company_id):
+            manager.update_employee(emp_code, {"company_id": int(company_id)})
+            return manager.get_employee(emp_code, include_inactive=True)
+        return employee
+
+    active = manager.get_employee(emp_code, include_inactive=False, company_id=company_id)
+    if active:
+        return _sync_company(active)
+
+    any_status = manager.get_employee(emp_code, include_inactive=True, company_id=company_id)
+    if any_status:
+        _reactivate_employee(manager, emp_code, company_id)
+        return _sync_company(manager.get_employee(emp_code, include_inactive=False, company_id=company_id))
+
+    # Cross-company fallback for globally unique employee codes.
+    any_company_active = manager.get_employee(emp_code, include_inactive=False, company_id=None)
+    if any_company_active:
+        return _sync_company(any_company_active)
+
+    any_company_inactive = manager.get_employee(emp_code, include_inactive=True, company_id=None)
+    if any_company_inactive:
+        _reactivate_employee(manager, emp_code, None)
+        return _sync_company(manager.get_employee(emp_code, include_inactive=False, company_id=None))
+
+    if not allow_auto_employee_creation:
+        return None
+
+    payload = _build_auto_employee_payload(record, company_id)
+    manager.add_employee(payload, raise_on_error=True)
+    return manager.get_employee(emp_code, include_inactive=False, company_id=company_id)
+
+
+def _auto_onboard_missing_employees(
+    manager: EmployeeManager,
+    records: list[dict],
+    company_id: int | None,
+    allow_auto_employee_creation: bool,
+) -> None:
+    if not allow_auto_employee_creation:
+        return
+    failures: list[str] = []
+    for record in records:
+        emp_code = _clean_text(record.get("emp_code"))
+        if not emp_code:
+            continue
+        try:
+            _ensure_employee_in_master(manager, record, company_id, allow_auto_employee_creation=True)
+        except Exception as exc:  # noqa: BLE001
+            failures.append(f"{emp_code}: {exc}")
+    if failures:
+        raise ValueError("Failed to auto-create missing employees: " + "; ".join(failures))
 
 
 def _company_output_dir(base_output_dir: Path, company_id: int | None) -> Path:
@@ -195,6 +330,7 @@ def create_payroll_preview(
     company_id: int | None = None,
     adjustments_file: str | Path | None = None,
     output_dir: Path | None = None,
+    allow_auto_employee_creation: bool = True,
 ) -> Dict[str, object]:
     """Create editable preview workbook before final payroll generation."""
     manager = employee_manager or get_manager()
@@ -210,6 +346,12 @@ def create_payroll_preview(
 
     archived_muster = copy_original_muster(Path(muster_file), period_dirs["original_muster"])
     parsed_df = parse_muster_roll(muster_file, employee_manager=manager, company_id=company_id)
+    _auto_onboard_missing_employees(
+        manager,
+        parsed_df.to_dict(orient="records"),
+        company_id=company_id,
+        allow_auto_employee_creation=allow_auto_employee_creation,
+    )
     master_codes, master_designations = _get_master_maps(manager, company_id=company_id)
     is_valid, errors, warnings = validate_muster_roll(parsed_df, master_codes, master_designations)
     if not is_valid:
@@ -284,6 +426,7 @@ def finalize_payroll_from_preview(
     company_id: int | None = None,
     output_dir: Path | None = None,
     require_approved_rows: bool = True,
+    allow_auto_employee_creation: bool = True,
 ) -> Dict[str, object]:
     """Finalize payroll from an edited preview workbook."""
     manager = employee_manager or get_manager()
@@ -324,22 +467,28 @@ def finalize_payroll_from_preview(
         emp_code = str(row.get("emp_code", "")).strip()
         if not emp_code:
             continue
-        master = manager.get_employee(emp_code, include_inactive=False, company_id=company_id)
+        row_dict = row.to_dict()
+        master = _ensure_employee_in_master(
+            manager,
+            row_dict,
+            company_id=company_id,
+            allow_auto_employee_creation=allow_auto_employee_creation,
+        )
         if not master:
             raise ValueError(f"Employee code not found/active in master data: {emp_code}")
         selected_rows.append(
             {
                 "emp_code": emp_code,
-                "emp_name": _clean_text(row.get("emp_name")) or _clean_text(master.get("emp_name")),
-                "father_husband_name": _clean_text(row.get("father_husband_name"))
+                "emp_name": _clean_text(row_dict.get("emp_name")) or _clean_text(master.get("emp_name")),
+                "father_husband_name": _clean_text(row_dict.get("father_husband_name"))
                 or _clean_text(master.get("father_husband_name")),
-                "designation": _clean_text(row.get("designation")) or _clean_text(master.get("designation")),
-                "grade": _clean_text(row.get("designation")) or _clean_text(master.get("designation")),
-                "department": _clean_text(row.get("department")) or _clean_text(master.get("department")),
-                "present_days": _safe_float(row.get("present_days"), 0.0),
-                "ot_hours": _safe_float(row.get("ot_hours"), 0.0),
-                "advance": _safe_float(row.get("advance"), 0.0),
-                "other_deduction": _safe_float(row.get("other_deduction"), 0.0),
+                "designation": _clean_text(row_dict.get("designation")) or _clean_text(master.get("designation")),
+                "grade": _clean_text(row_dict.get("designation")) or _clean_text(master.get("designation")),
+                "department": _clean_text(row_dict.get("department")) or _clean_text(master.get("department")),
+                "present_days": _safe_float(row_dict.get("present_days"), 0.0),
+                "ot_hours": _safe_float(row_dict.get("ot_hours"), 0.0),
+                "advance": _safe_float(row_dict.get("advance"), 0.0),
+                "other_deduction": _safe_float(row_dict.get("other_deduction"), 0.0),
                 "bank_account_no": master.get("bank_account_no", ""),
                 "ifsc_code": master.get("ifsc_code", ""),
                 "bank_name": master.get("bank_name", ""),
@@ -409,6 +558,7 @@ def process_monthly_payroll(
     adjustments_file: str | Path | None = None,
     output_dir: Path | None = None,
     require_clean_validation: bool = True,
+    allow_auto_employee_creation: bool = True,
 ) -> Dict[str, object]:
     """Process one payroll month directly from muster and generate all documents."""
     manager = employee_manager or get_manager()
@@ -424,6 +574,12 @@ def process_monthly_payroll(
 
     archived_muster = copy_original_muster(Path(muster_file), period_dirs["original_muster"])
     parsed_df = parse_muster_roll(muster_file, employee_manager=manager, company_id=company_id)
+    _auto_onboard_missing_employees(
+        manager,
+        parsed_df.to_dict(orient="records"),
+        company_id=company_id,
+        allow_auto_employee_creation=allow_auto_employee_creation,
+    )
 
     master_codes, master_designations = _get_master_maps(manager, company_id=company_id)
     is_valid, errors, warnings = validate_muster_roll(parsed_df, master_codes, master_designations)

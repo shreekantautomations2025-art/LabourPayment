@@ -424,8 +424,12 @@ def page_employee_management(manager: EmployeeManager, company_id: int | None) -
 
     with tabs[4]:
         st.subheader("Bulk Upload Employees")
-        st.caption("Upload .xlsx file with employee master columns.")
-        uploaded = st.file_uploader("Upload employee master file", type=["xlsx"], key="emp_bulk_upload")
+        st.caption("Upload employee master in xlsx/xls/csv/json/txt/pdf format.")
+        uploaded = st.file_uploader(
+            "Upload employee master file",
+            type=["xlsx", "xls", "csv", "json", "txt", "pdf"],
+            key="emp_bulk_upload",
+        )
         if uploaded and st.button("Process Bulk Upload", use_container_width=True):
             try:
                 file_path = save_uploaded_file(uploaded, INPUT_DIR / "ui_uploads", prefix="employee_bulk")
@@ -450,6 +454,11 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
     if company_id is None:
         st.warning("Select a company from sidebar first.")
         return
+    strict_master = st.checkbox(
+        "Strict master validation (disable auto-create missing employees)",
+        value=False,
+        help="When unchecked, payroll auto-creates missing employees from muster/preview data.",
+    )
 
     with preview_tab:
         st.subheader("Create Editable Preview")
@@ -484,6 +493,7 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
                             employee_manager=manager,
                             company_id=company_id,
                             adjustments_file=adjustments_path,
+                            allow_auto_employee_creation=not strict_master,
                         ),
                         steps=[
                             "Uploading and archiving muster",
@@ -544,6 +554,7 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
                                 employee_manager=manager,
                                 company_id=int(st.session_state.get("ui_preview_company_id", company_id)),
                                 require_approved_rows=True,
+                                allow_auto_employee_creation=not strict_master,
                             ),
                             steps=[
                                 "Validating approved rows",
@@ -578,6 +589,7 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
                                 employee_manager=manager,
                                 company_id=int(st.session_state.get("ui_preview_company_id", company_id)),
                                 require_approved_rows=True,
+                                allow_auto_employee_creation=not strict_master,
                             ),
                             steps=[
                                 "Reading uploaded preview workbook",
@@ -630,6 +642,7 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
                             company_id=company_id,
                             adjustments_file=adjustments_path,
                             require_clean_validation=True,
+                            allow_auto_employee_creation=not strict_master,
                         ),
                         steps=[
                             "Archiving source muster file",
