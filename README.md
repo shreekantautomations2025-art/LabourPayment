@@ -112,6 +112,7 @@ The UI provides:
 - Direct payroll processing option
 - Report/document browser with download buttons
 - Payment guidance view and payment instruction PDF download
+- Animated gradient dashboard, live status loaders, and success effects
 
 ### 1) Initialize DB
 ```bash

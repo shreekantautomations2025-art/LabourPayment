@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import time
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any, Callable
 
 import pandas as pd
 import streamlit as st
@@ -38,6 +40,151 @@ def _bootstrap() -> EmployeeManager:
     return EmployeeManager()
 
 
+def _inject_custom_css() -> None:
+    st.markdown(
+        """
+        <style>
+        :root {
+            --brand-1: #5d7cf9;
+            --brand-2: #7d5bff;
+            --brand-3: #21c7ff;
+            --glass-bg: rgba(255, 255, 255, 0.08);
+            --glass-border: rgba(255, 255, 255, 0.16);
+        }
+
+        [data-testid="stAppViewContainer"] {
+            background: linear-gradient(120deg, #0f172a, #1e1b4b, #0b1022);
+            background-size: 250% 250%;
+            animation: gradientShift 16s ease infinite;
+        }
+
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+
+        .hero-card {
+            border: 1px solid var(--glass-border);
+            background: linear-gradient(145deg, rgba(255,255,255,0.12), rgba(255,255,255,0.05));
+            border-radius: 16px;
+            padding: 1.1rem 1.2rem;
+            backdrop-filter: blur(8px);
+            box-shadow: 0 8px 22px rgba(0,0,0,0.25);
+            margin-bottom: 0.8rem;
+        }
+
+        .hero-title {
+            font-size: 1.6rem;
+            font-weight: 700;
+            letter-spacing: 0.2px;
+            background: linear-gradient(90deg, #ffffff, #a5b4fc, #67e8f9);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .hero-subtitle {
+            color: rgba(241, 245, 249, 0.9);
+            font-size: 0.95rem;
+            margin-top: 4px;
+        }
+
+        .metric-card {
+            border: 1px solid rgba(165, 180, 252, 0.35);
+            background: var(--glass-bg);
+            border-radius: 14px;
+            padding: 0.85rem 0.9rem;
+            box-shadow: 0 6px 16px rgba(0,0,0,0.2);
+            backdrop-filter: blur(6px);
+            transform: translateY(0);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            animation: softPulse 3s ease-in-out infinite;
+        }
+
+        .metric-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 24px rgba(0,0,0,0.28);
+        }
+
+        @keyframes softPulse {
+            0%, 100% { border-color: rgba(165, 180, 252, 0.30); }
+            50% { border-color: rgba(103, 232, 249, 0.45); }
+        }
+
+        .metric-title {
+            font-size: 0.82rem;
+            color: rgba(241, 245, 249, 0.78);
+            margin-bottom: 0.2rem;
+        }
+        .metric-value {
+            font-size: 1.18rem;
+            font-weight: 700;
+            color: #f8fafc;
+        }
+
+        .tag-pill {
+            display: inline-block;
+            padding: 0.22rem 0.6rem;
+            border-radius: 999px;
+            border: 1px solid rgba(255,255,255,0.22);
+            color: #e2e8f0;
+            font-size: 0.75rem;
+            margin-right: 0.35rem;
+            margin-bottom: 0.25rem;
+            background: rgba(255,255,255,0.06);
+        }
+
+        .section-anchor {
+            display: block;
+            padding-top: 0.35rem;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_hero(title: str, subtitle: str, pills: list[str] | None = None) -> None:
+    pills_html = "".join([f'<span class="tag-pill">{item}</span>' for item in (pills or [])])
+    st.markdown(
+        f"""
+        <div class="hero-card">
+            <div class="hero-title">{title}</div>
+            <div class="hero-subtitle">{subtitle}</div>
+            <div style="margin-top: 8px;">{pills_html}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_metric_cards(metrics: list[tuple[str, str]]) -> None:
+    cols = st.columns(len(metrics))
+    for col, (title, value) in zip(cols, metrics):
+        col.markdown(
+            f"""
+            <div class="metric-card">
+                <div class="metric-title">{title}</div>
+                <div class="metric-value">{value}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
+def _run_with_animation(label: str, operation: Callable[[], Any], steps: list[str] | None = None) -> Any:
+    flow = steps or ["Validating input", "Processing backend workflow", "Preparing outputs"]
+    with st.status(label, expanded=True) as status:
+        for idx, step in enumerate(flow):
+            status.write(f"⏳ {step}...")
+            if idx < len(flow) - 1:
+                time.sleep(0.2)
+        result = operation()
+        status.write("✅ Completed successfully.")
+        status.update(label=f"{label} complete", state="complete", expanded=False)
+    return result
+
+
 def _render_output_downloads(output_paths: dict) -> None:
     if not output_paths:
         return
@@ -59,11 +206,14 @@ def _render_output_downloads(output_paths: dict) -> None:
 
 def _render_processing_summary(result: dict) -> None:
     totals = result.get("totals", {})
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Employees", int(result.get("employee_count", 0)))
-    c2.metric("Gross Salary", f"₹{float(totals.get('gross_salary', 0)):,.2f}")
-    c3.metric("Total Deductions", f"₹{float(totals.get('deductions', 0)):,.2f}")
-    c4.metric("Net Payable", f"₹{float(totals.get('net_payable', 0)):,.2f}")
+    _render_metric_cards(
+        [
+            ("Employees", f"{int(result.get('employee_count', 0))}"),
+            ("Gross Salary", f"₹{float(totals.get('gross_salary', 0)):,.2f}"),
+            ("Total Deductions", f"₹{float(totals.get('deductions', 0)):,.2f}"),
+            ("Net Payable", f"₹{float(totals.get('net_payable', 0)):,.2f}"),
+        ]
+    )
 
     validation = result.get("validation", {})
     warnings = validation.get("warnings", [])
@@ -98,14 +248,20 @@ def _gender_index(value: str) -> int:
 
 
 def page_dashboard() -> None:
-    st.header("Payroll Dashboard")
-    st.caption("Indian Labour Contractor Payroll Automation System")
+    _render_hero(
+        "Payroll Dashboard",
+        "Indian Labour Contractor Payroll Automation System",
+        ["Employee Master", "Payroll Engine", "Compliance Reports", "Payment Guidance"],
+    )
 
     periods = discover_output_periods()
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Output Periods", len(periods))
-    c2.metric("Contractor", CONTRACTOR_NAME)
-    c3.metric("Client", CLIENT_NAME)
+    _render_metric_cards(
+        [
+            ("Output Periods", str(len(periods))),
+            ("Contractor", CONTRACTOR_NAME),
+            ("Client", CLIENT_NAME),
+        ]
+    )
 
     if periods:
         latest = periods[0]
@@ -119,7 +275,11 @@ def page_dashboard() -> None:
 
 
 def page_employee_management(manager: EmployeeManager) -> None:
-    st.header("Employee Management")
+    _render_hero(
+        "Employee Management",
+        "Add, edit, delete, filter, and bulk upload employee master records.",
+        ["CRUD", "Bulk Upload", "Encrypted Fields"],
+    )
     tabs = st.tabs(["View Employees", "Add Employee", "Edit Employee", "Delete Employee", "Bulk Upload"])
 
     with tabs[0]:
@@ -166,7 +326,13 @@ def page_employee_management(manager: EmployeeManager) -> None:
             submitted = st.form_submit_button("Add Employee", use_container_width=True)
             if submitted:
                 try:
-                    manager.add_employee(payload, raise_on_error=True)
+                    _run_with_animation(
+                        "Adding employee",
+                        lambda: manager.add_employee(payload, raise_on_error=True),
+                        steps=["Validating employee fields", "Persisting to database", "Refreshing cache"],
+                    )
+                    st.balloons()
+                    st.toast("Employee added", icon="✅")
                     st.success(f"Employee {payload['emp_code']} added successfully.")
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Failed to add employee: {exc}")
@@ -208,7 +374,12 @@ def page_employee_management(manager: EmployeeManager) -> None:
                 submitted = st.form_submit_button("Save Changes", use_container_width=True)
                 if submitted:
                     try:
-                        manager.update_employee(emp_code, payload, raise_on_error=True)
+                        _run_with_animation(
+                            "Updating employee",
+                            lambda: manager.update_employee(emp_code, payload, raise_on_error=True),
+                            steps=["Validating updated fields", "Applying update in database", "Writing audit log"],
+                        )
+                        st.toast("Employee updated", icon="✅")
                         st.success(f"Employee {emp_code} updated successfully.")
                     except Exception as exc:  # noqa: BLE001
                         st.error(f"Failed to update employee: {exc}")
@@ -228,9 +399,14 @@ def page_employee_management(manager: EmployeeManager) -> None:
                 if confirm_text.strip() != emp_code:
                     st.error("Confirmation code mismatch. Employee not deleted.")
                 else:
-                    ok = manager.delete_employee(emp_code, soft_delete=soft_delete)
+                    ok = _run_with_animation(
+                        "Deleting employee",
+                        lambda: manager.delete_employee(emp_code, soft_delete=soft_delete),
+                        steps=["Checking employee record", "Applying delete operation", "Updating audit trail"],
+                    )
                     if ok:
                         mode = "soft deleted" if soft_delete else "hard deleted"
+                        st.toast("Employee deleted", icon="🗑️")
                         st.success(f"Employee {emp_code} {mode}.")
                     else:
                         st.error("Employee not found.")
@@ -242,7 +418,11 @@ def page_employee_management(manager: EmployeeManager) -> None:
         if uploaded and st.button("Process Bulk Upload", use_container_width=True):
             try:
                 file_path = save_uploaded_file(uploaded, INPUT_DIR / "ui_uploads", prefix="employee_bulk")
-                result = manager.bulk_upload_employees(file_path)
+                result = _run_with_animation(
+                    "Processing bulk upload",
+                    lambda: manager.bulk_upload_employees(file_path),
+                    steps=["Saving uploaded file", "Validating and upserting records", "Creating summary response"],
+                )
                 st.success("Bulk upload processed.")
                 st.json(result)
             except Exception as exc:  # noqa: BLE001
@@ -250,7 +430,11 @@ def page_employee_management(manager: EmployeeManager) -> None:
 
 
 def page_payroll_processing(manager: EmployeeManager) -> None:
-    st.header("Monthly Payroll Processing")
+    _render_hero(
+        "Monthly Payroll Processing",
+        "Run direct payroll or use preview -> approve -> finalize flow.",
+        ["Validation", "Preview Mode", "Automated Reports", "ECR + NACH"],
+    )
     preview_tab, direct_tab = st.tabs(["Preview -> Approve -> Finalize", "Direct Processing"])
 
     with preview_tab:
@@ -277,16 +461,25 @@ def page_payroll_processing(manager: EmployeeManager) -> None:
                             adjustments_upload, INPUT_DIR / "ui_uploads", prefix="adjustments_ui_preview"
                         )
 
-                    result = create_payroll_preview(
-                        muster_file=muster_path,
-                        month=int(month),
-                        year=int(year),
-                        employee_manager=manager,
-                        adjustments_file=adjustments_path,
+                    result = _run_with_animation(
+                        "Creating payroll preview",
+                        lambda: create_payroll_preview(
+                            muster_file=muster_path,
+                            month=int(month),
+                            year=int(year),
+                            employee_manager=manager,
+                            adjustments_file=adjustments_path,
+                        ),
+                        steps=[
+                            "Uploading and archiving muster",
+                            "Parsing attendance and OT",
+                            "Generating editable preview workbook",
+                        ],
                     )
                     st.session_state["ui_preview_result"] = result
                     st.session_state["ui_preview_month"] = int(month)
                     st.session_state["ui_preview_year"] = int(year)
+                    st.toast("Preview workbook created", icon="📄")
                     st.success("Preview workbook generated successfully.")
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Preview generation failed: {exc}")
@@ -326,14 +519,24 @@ def page_payroll_processing(manager: EmployeeManager) -> None:
                             int(st.session_state["ui_preview_year"]),
                         )
                         temp_preview_path.write_bytes(edited_preview_bytes)
-                        final = finalize_payroll_from_preview(
-                            preview_file=temp_preview_path,
-                            month=int(st.session_state["ui_preview_month"]),
-                            year=int(st.session_state["ui_preview_year"]),
-                            employee_manager=manager,
-                            require_approved_rows=True,
+                        final = _run_with_animation(
+                            "Finalizing payroll from edited preview",
+                            lambda: finalize_payroll_from_preview(
+                                preview_file=temp_preview_path,
+                                month=int(st.session_state["ui_preview_month"]),
+                                year=int(st.session_state["ui_preview_year"]),
+                                employee_manager=manager,
+                                require_approved_rows=True,
+                            ),
+                            steps=[
+                                "Validating approved rows",
+                                "Running payroll calculation engine",
+                                "Generating Excel/PDF/CSV outputs",
+                            ],
                         )
                         st.session_state["ui_final_result"] = final
+                        st.balloons()
+                        st.toast("Payroll finalized", icon="✅")
                         st.success("Payroll finalized from edited table.")
                     except Exception as exc:  # noqa: BLE001
                         st.error(f"Finalize failed: {exc}")
@@ -349,14 +552,24 @@ def page_payroll_processing(manager: EmployeeManager) -> None:
                         ext_preview_path = save_uploaded_file(
                             edited_file_upload, INPUT_DIR / "ui_uploads", prefix="external_edited_preview"
                         )
-                        final = finalize_payroll_from_preview(
-                            preview_file=ext_preview_path,
-                            month=int(st.session_state["ui_preview_month"]),
-                            year=int(st.session_state["ui_preview_year"]),
-                            employee_manager=manager,
-                            require_approved_rows=True,
+                        final = _run_with_animation(
+                            "Finalizing payroll from uploaded preview",
+                            lambda: finalize_payroll_from_preview(
+                                preview_file=ext_preview_path,
+                                month=int(st.session_state["ui_preview_month"]),
+                                year=int(st.session_state["ui_preview_year"]),
+                                employee_manager=manager,
+                                require_approved_rows=True,
+                            ),
+                            steps=[
+                                "Reading uploaded preview workbook",
+                                "Validating approved payroll records",
+                                "Generating all statutory outputs",
+                            ],
                         )
                         st.session_state["ui_final_result"] = final
+                        st.balloons()
+                        st.toast("Payroll finalized", icon="✅")
                         st.success("Payroll finalized from uploaded preview.")
                     except Exception as exc:  # noqa: BLE001
                         st.error(f"Finalize from upload failed: {exc}")
@@ -389,15 +602,25 @@ def page_payroll_processing(manager: EmployeeManager) -> None:
                             INPUT_DIR / "ui_uploads",
                             prefix="adjustments_ui_direct",
                         )
-                    result = process_monthly_payroll(
-                        muster_file=muster_path,
-                        month=int(month_direct),
-                        year=int(year_direct),
-                        employee_manager=manager,
-                        adjustments_file=adjustments_path,
-                        require_clean_validation=True,
+                    result = _run_with_animation(
+                        "Running direct payroll",
+                        lambda: process_monthly_payroll(
+                            muster_file=muster_path,
+                            month=int(month_direct),
+                            year=int(year_direct),
+                            employee_manager=manager,
+                            adjustments_file=adjustments_path,
+                            require_clean_validation=True,
+                        ),
+                        steps=[
+                            "Archiving source muster file",
+                            "Calculating wages and deductions",
+                            "Generating all reports and registers",
+                        ],
                     )
                     st.session_state["ui_final_result"] = result
+                    st.balloons()
+                    st.toast("Direct payroll run completed", icon="✅")
                     st.success("Direct payroll processing completed.")
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Direct payroll processing failed: {exc}")
@@ -410,7 +633,11 @@ def page_payroll_processing(manager: EmployeeManager) -> None:
 
 
 def page_reports() -> None:
-    st.header("Reports & Documents")
+    _render_hero(
+        "Reports & Documents",
+        "Browse monthly generated files and download reports instantly.",
+        ["Excel", "PDF", "CSV"],
+    )
     periods = discover_output_periods()
     if not periods:
         st.info("No output folders found. Process payroll first.")
@@ -438,7 +665,11 @@ def page_reports() -> None:
 
 
 def page_payment_guidance() -> None:
-    st.header("Payment Guidance")
+    _render_hero(
+        "Payment Guidance",
+        "Step-by-step statutory and bank payment instructions (guidance only).",
+        ["PF", "ESIC", "PT", "Bank Upload"],
+    )
     st.info("This system does not auto-pay challans. It only provides guidance and reports.")
 
     st.markdown(
@@ -485,7 +716,11 @@ def page_payment_guidance() -> None:
 
 
 def page_configuration() -> None:
-    st.header("Configuration Snapshot")
+    _render_hero(
+        "Configuration Snapshot",
+        "Read-only values loaded from current configuration.",
+        ["Contractor", "Client", "Statutory Codes"],
+    )
     st.caption("Read-only configuration currently loaded by system.")
     config_payload = {
         "contractor_name": CONTRACTOR_NAME,
@@ -499,6 +734,7 @@ def page_configuration() -> None:
 
 def run_app() -> None:
     st.set_page_config(page_title="Indian Labour Payroll Automation", layout="wide")
+    _inject_custom_css()
     manager = _bootstrap()
 
     st.sidebar.title("Payroll Automation")
