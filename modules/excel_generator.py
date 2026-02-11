@@ -333,7 +333,10 @@ def generate_pf_summary(employee_wages: Iterable[dict], month: int, year: int, o
     for idx, row in enumerate(rows, start=1):
         basic = _currency(row.get("pf_basic", row.get("basic_wages", 0)))
         emp_pf = _currency(row.get("pf_employee", 0))
-        emp_epf, emp_eps = split_employer_pf(basic)
+        company_settings = row.get("company_settings") if isinstance(row, dict) else None
+        epf_rate = float(company_settings.get("pf_epf_rate", 0.0367)) if company_settings else 0.0367
+        eps_rate = float(company_settings.get("pf_eps_rate", 0.0833)) if company_settings else 0.0833
+        emp_epf, emp_eps = split_employer_pf(basic, epf_rate=epf_rate, eps_rate=eps_rate)
         emp_total = _currency(row.get("pf_employer", 0))
         ws.append(
             [
@@ -461,7 +464,13 @@ def generate_esic_summary(employee_wages: Iterable[dict], month: int, year: int,
     return out_path
 
 
-def generate_pt_summary(employee_wages: Iterable[dict], month: int, year: int, output_dir: Path | None = None) -> Path:
+def generate_pt_summary(
+    employee_wages: Iterable[dict],
+    month: int,
+    year: int,
+    output_dir: Path | None = None,
+    company_settings: dict | None = None,
+) -> Path:
     """Generate professional tax summary for all PT deducted rows."""
     rows = [row for row in employee_wages if float(row.get("pt", 0) or 0) > 0]
     wb = Workbook()
@@ -477,7 +486,7 @@ def generate_pt_summary(employee_wages: Iterable[dict], month: int, year: int, o
                 row.get("emp_code", ""),
                 row.get("emp_name", ""),
                 gross,
-                get_pt_slab_label(gross),
+                get_pt_slab_label(gross, pt_slabs=(company_settings or {}).get("pt_slabs")),
                 _currency(row.get("pt", 0)),
                 "Deducted",
             ]

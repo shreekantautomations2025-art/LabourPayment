@@ -90,7 +90,11 @@ def _to_float(value: object) -> float:
         return 0.0
 
 
-def parse_muster_roll(excel_file: str | Path, employee_manager: EmployeeManager | None = None) -> pd.DataFrame:
+def parse_muster_roll(
+    excel_file: str | Path,
+    employee_manager: EmployeeManager | None = None,
+    company_id: int | None = None,
+) -> pd.DataFrame:
     """Parse uploaded muster roll excel and return employee-wise attendance dataset."""
     file_path = Path(excel_file)
     if not file_path.exists():
@@ -126,7 +130,8 @@ def parse_muster_roll(excel_file: str | Path, employee_manager: EmployeeManager 
         ]
 
     manager = employee_manager or get_manager()
-    master_rows = manager.get_all_employees(filters=None, active_only=False)
+    master_filters = {"company_id": int(company_id)} if company_id is not None else None
+    master_rows = manager.get_all_employees(filters=master_filters, active_only=False)
     master_by_code = {str(row["emp_code"]).strip(): row for row in master_rows}
 
     parsed_rows: List[Dict[str, object]] = []
@@ -172,6 +177,7 @@ def parse_muster_roll(excel_file: str | Path, employee_manager: EmployeeManager 
                 "dob": str(master.get("dob", "")).strip(),
                 "doj": str(master.get("doj", "")).strip(),
                 "gender": str(master.get("gender", "")).strip(),
+                "company_id": master.get("company_id"),
             }
         )
 

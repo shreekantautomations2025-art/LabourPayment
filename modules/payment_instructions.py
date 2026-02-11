@@ -41,9 +41,17 @@ def build_payment_summary(employee_wages: Iterable[dict]) -> Dict[str, float]:
 
 
 def generate_payment_instructions(
-    summary_data: Dict[str, float], month: int, year: int, output_dir: Path | None = None
+    summary_data: Dict[str, float],
+    month: int,
+    year: int,
+    output_dir: Path | None = None,
+    company_config: dict | None = None,
 ) -> Path:
     """Generate payment instruction PDF only (no payment execution)."""
+    pf_code = (company_config or {}).get("pf_establishment_code", PF_ESTABLISHMENT_CODE)
+    esic_code = (company_config or {}).get("esic_employer_code", ESIC_EMPLOYER_CODE)
+    pt_code = (company_config or {}).get("pt_registration_no", PT_REGISTRATION_NO)
+
     out_file = _output_dir(month, year, output_dir) / f"Payment_Instructions_{month_short_name(month)}_{year}.pdf"
     doc = SimpleDocTemplate(str(out_file), pagesize=A4, leftMargin=14 * mm, rightMargin=14 * mm)
     styles = getSampleStyleSheet()
@@ -66,7 +74,7 @@ def generate_payment_instructions(
         f"STEP 4: Verify challan amount: {_money(summary_data.get('pf_total', 0))}",
         "STEP 5: Make payment via Net Banking/Challan",
         "STEP 6: Save payment receipt/TRRN number",
-        f"Due Date: {pf_due.isoformat()} | Establishment Code: {PF_ESTABLISHMENT_CODE}",
+        f"Due Date: {pf_due.isoformat()} | Establishment Code: {pf_code}",
         f"Employee Share: {_money(summary_data.get('pf_employee_share', 0))} | Employer Share: {_money(summary_data.get('pf_employer_share', 0))}",
         "Late Penalty: 12% per annum on delayed amount",
     ]
@@ -81,7 +89,7 @@ def generate_payment_instructions(
         "STEP 3: Enter contribution period and amount",
         "STEP 4: Verify details and complete payment",
         "STEP 5: Save challan PDF and transaction number",
-        f"Due Date: {esic_due.isoformat()} | Employer Code: {ESIC_EMPLOYER_CODE}",
+        f"Due Date: {esic_due.isoformat()} | Employer Code: {esic_code}",
         f"Employee Contribution: {_money(summary_data.get('esic_employee_share', 0))}",
         f"Employer Contribution: {_money(summary_data.get('esic_employer_share', 0))}",
         f"Total ESIC: {_money(summary_data.get('esic_total', 0))}",
@@ -97,7 +105,7 @@ def generate_payment_instructions(
         "STEP 2: Go to Professional Tax > Monthly Return",
         "STEP 3: File return, generate challan, and make payment",
         "STEP 4: Save acknowledgment copy",
-        f"Due Date: {pt_due.isoformat()} | Registration No: {PT_REGISTRATION_NO or 'N/A'}",
+        f"Due Date: {pt_due.isoformat()} | Registration No: {pt_code or 'N/A'}",
         f"Total PT Deducted: {_money(summary_data.get('pt_total', 0))}",
     ]
     for line in pt_lines:

@@ -73,7 +73,7 @@ def list_output_files(period_key: str, extensions: Iterable[str] | None = None) 
         return []
 
     exts = {e.lower() for e in (extensions or [])}
-    files = [p for p in target_dir.iterdir() if p.is_file()]
+    files = [p for p in target_dir.rglob("*") if p.is_file()]
     if exts:
         files = [p for p in files if p.suffix.lower() in exts]
     return sorted(files, key=lambda p: p.name.lower())

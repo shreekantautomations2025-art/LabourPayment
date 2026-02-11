@@ -9,6 +9,7 @@ from typing import Dict
 
 import pandas as pd
 
+from modules.company_manager import get_company_manager
 from modules.employee_manager import EmployeeManager, get_manager
 from modules.excel_generator import (
     generate_advance_register,
@@ -77,13 +78,6 @@ def _bool_approved(value: object) -> bool:
     return text in {"y", "yes", "true", "1", "approved"}
 
 
-def _get_master_maps(manager: EmployeeManager) -> tuple[set[str], dict]:
-    master_rows = manager.get_all_employees(active_only=True)
-    codes = {r["emp_code"] for r in master_rows}
-    designations = {r["emp_code"]: r["designation"] for r in master_rows}
-    return codes, designations
-
-
 def _calculate_totals(wages: list[dict]) -> dict:
     return {
         "gross_salary": round(sum(float(r["gross_salary"]) for r in wages), 2),
@@ -117,6 +111,47 @@ def _clean_text(value: object) -> str:
     return str(value).strip()
 
 
+def _company_output_dir(base_output_dir: Path, company_id: int | None) -> Path:
+    if company_id is None:
+        return base_output_dir
+    return base_output_dir / f"company_{int(company_id)}"
+
+
+def _company_data_dir(base_data_dir: Path, company_id: int | None) -> Path:
+    if company_id is None:
+        return base_data_dir
+    return base_data_dir / f"company_{int(company_id)}"
+
+
+def _get_company_context(company_id: int | None) -> dict | None:
+    if company_id is None:
+        return None
+    company_manager = get_company_manager()
+    return company_manager.get_company_configuration(int(company_id))
+
+
+def _resolve_company_from_preview(df: pd.DataFrame, company_id: int | None) -> int | None:
+    if company_id is not None:
+        return int(company_id)
+    if "company_id" not in df.columns:
+        return None
+    series = df["company_id"].dropna()
+    if series.empty:
+        return None
+    try:
+        return int(series.iloc[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_master_maps(manager: EmployeeManager, company_id: int | None = None) -> tuple[set[str], dict]:
+    filters = {"company_id": int(company_id)} if company_id is not None else None
+    master_rows = manager.get_all_employees(active_only=True, filters=filters)
+    codes = {r["emp_code"] for r in master_rows}
+    designations = {r["emp_code"]: r["designation"] for r in master_rows}
+    return codes, designations
+
+
 def _generate_outputs(
     *,
     wages: list[dict],
@@ -124,28 +159,29 @@ def _generate_outputs(
     year: int,
     period_data_dir: Path,
     period_output_dir: Path,
+    company_config: dict | None = None,
 ) -> dict:
     dept_summary = build_department_summary(wages)
     output_paths = {
         "department_summary_excel": str(generate_department_salary_summary(wages, month, year, period_output_dir)),
-        "md_invoice_pdf": str(generate_md_invoice(month, year, dept_summary, period_output_dir)),
-        "ot_invoice_pdf": str(generate_ot_invoice(month, year, dept_summary, period_output_dir)),
+        "md_invoice_pdf": str(generate_md_invoice(month, year, dept_summary, period_output_dir, company_config=company_config)),
+        "ot_invoice_pdf": str(generate_ot_invoice(month, year, dept_summary, period_output_dir, company_config=company_config)),
         "bank_payment_excel": str(generate_bank_payment_excel(wages, month, year, period_output_dir)),
         "nach_upload_csv": str(generate_nach_upload_csv(wages, month, year, period_output_dir)),
         "pf_summary_excel": str(generate_pf_summary(wages, month, year, period_output_dir)),
         "pf_ecr_csv": str(generate_pf_ecr_file(wages, month, year, period_output_dir)),
         "esic_summary_excel": str(generate_esic_summary(wages, month, year, period_output_dir)),
-        "pt_summary_excel": str(generate_pt_summary(wages, month, year, period_output_dir)),
+        "pt_summary_excel": str(generate_pt_summary(wages, month, year, period_output_dir, company_settings=company_config)),
         "wages_register_excel": str(generate_wages_register_excel(wages, month, year, period_output_dir)),
-        "wages_register_pdf": str(generate_wages_register_pdf(wages, month, year, period_output_dir)),
-        "ot_register_pdf": str(generate_ot_register_pdf(wages, month, year, period_output_dir)),
+        "wages_register_pdf": str(generate_wages_register_pdf(wages, month, year, period_output_dir, company_config=company_config)),
+        "ot_register_pdf": str(generate_ot_register_pdf(wages, month, year, period_output_dir, company_config=company_config)),
     }
 
     advances_rows = _load_advances_for_period(period_data_dir)
     output_paths["advance_register_excel"] = str(generate_advance_register(advances_rows, month, year, period_output_dir))
     payment_summary = build_payment_summary(wages)
     output_paths["payment_instructions_pdf"] = str(
-        generate_payment_instructions(payment_summary, month, year, period_output_dir)
+        generate_payment_instructions(payment_summary, month, year, period_output_dir, company_config=company_config)
     )
     return output_paths
 
@@ -156,19 +192,25 @@ def create_payroll_preview(
     month: int,
     year: int,
     employee_manager: EmployeeManager | None = None,
+    company_id: int | None = None,
     adjustments_file: str | Path | None = None,
     output_dir: Path | None = None,
 ) -> Dict[str, object]:
     """Create editable preview workbook before final payroll generation."""
     manager = employee_manager or get_manager()
+    company_config = _get_company_context(company_id)
     period_dirs = get_period_directories(month, year)
-    period_data_dir = period_dirs["data_period"]
-    period_output_dir = output_dir or period_dirs["output_period"]
+    period_data_dir = _company_data_dir(period_dirs["data_period"], company_id)
+    if output_dir is None:
+        period_output_dir = _company_output_dir(period_dirs["output_period"], company_id)
+    else:
+        period_output_dir = Path(output_dir)
+    period_data_dir.mkdir(parents=True, exist_ok=True)
     period_output_dir.mkdir(parents=True, exist_ok=True)
 
     archived_muster = copy_original_muster(Path(muster_file), period_dirs["original_muster"])
-    parsed_df = parse_muster_roll(muster_file, employee_manager=manager)
-    master_codes, master_designations = _get_master_maps(manager)
+    parsed_df = parse_muster_roll(muster_file, employee_manager=manager, company_id=company_id)
+    master_codes, master_designations = _get_master_maps(manager, company_id=company_id)
     is_valid, errors, warnings = validate_muster_roll(parsed_df, master_codes, master_designations)
     if not is_valid:
         raise ValueError("Muster validation failed: " + "; ".join(errors))
@@ -179,6 +221,7 @@ def create_payroll_preview(
     preview_df["other_deduction"] = preview_df["emp_code"].map(other_deductions_map).fillna(0.0)
     preview_df["approved"] = "Y"
     preview_df["reviewer_remarks"] = ""
+    preview_df["company_id"] = int(company_id) if company_id is not None else ""
 
     columns = [
         "emp_code",
@@ -192,6 +235,7 @@ def create_payroll_preview(
         "other_deduction",
         "approved",
         "reviewer_remarks",
+        "company_id",
     ]
     preview_df = preview_df[columns]
 
@@ -215,6 +259,8 @@ def create_payroll_preview(
         "archived_muster": str(archived_muster),
         "preview_file": str(preview_path),
         "row_count": int(len(preview_df)),
+        "company_id": company_id,
+        "company_name": (company_config or {}).get("company_name"),
     }
     (period_data_dir / "preview_context.json").write_text(json.dumps(context, indent=2), encoding="utf-8")
     log_audit("payroll_preview_created", context)
@@ -224,6 +270,8 @@ def create_payroll_preview(
         "archived_muster": str(archived_muster),
         "validation": {"is_valid": is_valid, "errors": errors, "warnings": warnings},
         "row_count": int(len(preview_df)),
+        "company_id": company_id,
+        "company_name": (company_config or {}).get("company_name"),
     }
 
 
@@ -233,6 +281,7 @@ def finalize_payroll_from_preview(
     month: int,
     year: int,
     employee_manager: EmployeeManager | None = None,
+    company_id: int | None = None,
     output_dir: Path | None = None,
     require_approved_rows: bool = True,
 ) -> Dict[str, object]:
@@ -242,13 +291,20 @@ def finalize_payroll_from_preview(
     if not preview_path.exists():
         raise FileNotFoundError(f"Preview file not found: {preview_path}")
 
-    period_dirs = get_period_directories(month, year)
-    period_data_dir = period_dirs["data_period"]
-    period_output_dir = output_dir or period_dirs["output_period"]
-    period_output_dir.mkdir(parents=True, exist_ok=True)
-
     df = pd.read_excel(preview_path, sheet_name="Editable_Preview")
     df = _normalize_preview_columns(df)
+    company_id = _resolve_company_from_preview(df, company_id)
+    company_config = _get_company_context(company_id)
+
+    period_dirs = get_period_directories(month, year)
+    period_data_dir = _company_data_dir(period_dirs["data_period"], company_id)
+    if output_dir is None:
+        period_output_dir = _company_output_dir(period_dirs["output_period"], company_id)
+    else:
+        period_output_dir = Path(output_dir)
+    period_data_dir.mkdir(parents=True, exist_ok=True)
+    period_output_dir.mkdir(parents=True, exist_ok=True)
+
     required_cols = {"emp_code", "present_days", "ot_hours"}
     missing = required_cols - set(df.columns)
     if missing:
@@ -268,7 +324,7 @@ def finalize_payroll_from_preview(
         emp_code = str(row.get("emp_code", "")).strip()
         if not emp_code:
             continue
-        master = manager.get_employee(emp_code, include_inactive=False)
+        master = manager.get_employee(emp_code, include_inactive=False, company_id=company_id)
         if not master:
             raise ValueError(f"Employee code not found/active in master data: {emp_code}")
         selected_rows.append(
@@ -291,6 +347,7 @@ def finalize_payroll_from_preview(
                 "esic_no": master.get("esic_no", ""),
                 "dob": master.get("dob", ""),
                 "doj": master.get("doj", ""),
+                "company_id": company_id,
             }
         )
 
@@ -298,12 +355,16 @@ def finalize_payroll_from_preview(
         raise ValueError("No approved rows found in preview file for final payroll processing")
 
     parsed_df = pd.DataFrame(selected_rows)
-    master_codes, master_designations = _get_master_maps(manager)
+    master_codes, master_designations = _get_master_maps(manager, company_id=company_id)
     is_valid, errors, warnings = validate_muster_roll(parsed_df, master_codes, master_designations)
     if not is_valid:
         raise ValueError("Preview validation failed: " + "; ".join(errors))
 
-    wages = calculate_batch_wages(parsed_df.to_dict(orient="records"), month=month)
+    wages = calculate_batch_wages(
+        parsed_df.to_dict(orient="records"),
+        month=month,
+        company_settings=company_config,
+    )
     _persist_period_data(period_data_dir, parsed_df, wages)
     output_paths = _generate_outputs(
         wages=wages,
@@ -311,6 +372,7 @@ def finalize_payroll_from_preview(
         year=year,
         period_data_dir=period_data_dir,
         period_output_dir=period_output_dir,
+        company_config=company_config,
     )
 
     response = {
@@ -320,11 +382,19 @@ def finalize_payroll_from_preview(
         "employee_count": len(wages),
         "totals": _calculate_totals(wages),
         "output_paths": output_paths,
+        "company_id": company_id,
+        "company_name": (company_config or {}).get("company_name"),
     }
     (period_data_dir / "processing_summary.json").write_text(json.dumps(response, indent=2), encoding="utf-8")
     log_audit(
         "monthly_payroll_finalized_from_preview",
-        {"month": month, "year": year, "preview_file": str(preview_path), "employee_count": len(wages)},
+        {
+            "month": month,
+            "year": year,
+            "preview_file": str(preview_path),
+            "employee_count": len(wages),
+            "company_id": company_id,
+        },
     )
     return response
 
@@ -335,21 +405,27 @@ def process_monthly_payroll(
     month: int,
     year: int,
     employee_manager: EmployeeManager | None = None,
+    company_id: int | None = None,
     adjustments_file: str | Path | None = None,
     output_dir: Path | None = None,
     require_clean_validation: bool = True,
 ) -> Dict[str, object]:
     """Process one payroll month directly from muster and generate all documents."""
     manager = employee_manager or get_manager()
+    company_config = _get_company_context(company_id)
     period_dirs = get_period_directories(month, year)
-    period_data_dir = period_dirs["data_period"]
-    period_output_dir = output_dir or period_dirs["output_period"]
+    period_data_dir = _company_data_dir(period_dirs["data_period"], company_id)
+    if output_dir is None:
+        period_output_dir = _company_output_dir(period_dirs["output_period"], company_id)
+    else:
+        period_output_dir = Path(output_dir)
+    period_data_dir.mkdir(parents=True, exist_ok=True)
     period_output_dir.mkdir(parents=True, exist_ok=True)
 
     archived_muster = copy_original_muster(Path(muster_file), period_dirs["original_muster"])
-    parsed_df = parse_muster_roll(muster_file, employee_manager=manager)
+    parsed_df = parse_muster_roll(muster_file, employee_manager=manager, company_id=company_id)
 
-    master_codes, master_designations = _get_master_maps(manager)
+    master_codes, master_designations = _get_master_maps(manager, company_id=company_id)
     is_valid, errors, warnings = validate_muster_roll(parsed_df, master_codes, master_designations)
     if require_clean_validation and not is_valid:
         raise ValueError("Muster validation failed: " + "; ".join(errors))
@@ -360,6 +436,7 @@ def process_monthly_payroll(
         month=month,
         advances_map=advances_map,
         deductions_map=other_deductions_map,
+        company_settings=company_config,
     )
 
     _persist_period_data(period_data_dir, parsed_df, wages)
@@ -369,6 +446,7 @@ def process_monthly_payroll(
         year=year,
         period_data_dir=period_data_dir,
         period_output_dir=period_output_dir,
+        company_config=company_config,
     )
 
     response = {
@@ -378,6 +456,8 @@ def process_monthly_payroll(
         "employee_count": len(wages),
         "totals": _calculate_totals(wages),
         "output_paths": output_paths,
+        "company_id": company_id,
+        "company_name": (company_config or {}).get("company_name"),
     }
     (period_data_dir / "processing_summary.json").write_text(json.dumps(response, indent=2), encoding="utf-8")
 
@@ -389,6 +469,7 @@ def process_monthly_payroll(
             "muster_file": str(muster_file),
             "employee_count": len(wages),
             "net_payable": response["totals"]["net_payable"],
+            "company_id": company_id,
         },
     )
     return response

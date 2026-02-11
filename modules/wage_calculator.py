@@ -14,15 +14,31 @@ def _money(value: float) -> float:
     return round(float(value), 2)
 
 
-def get_rates(designation: str) -> Dict[str, float]:
+def _setting(company_settings: dict | None, key: str, fallback: float) -> float:
+    if company_settings is None:
+        return float(fallback)
+    value = company_settings.get(key, fallback)
+    return float(value)
+
+
+def get_rates(designation: str, company_settings: dict | None = None) -> Dict[str, float]:
     """Determine daily and OT rates based on designation/grade."""
     value = str(designation or "").lower()
+    labour_daily_rate = _setting(company_settings, "labour_daily_rate", LABOUR_DAILY_RATE)
+    supervisor_daily_rate = _setting(company_settings, "supervisor_daily_rate", SUPERVISOR_DAILY_RATE)
+    labour_ot_rate = _setting(company_settings, "labour_ot_rate", LABOUR_OT_RATE)
+    supervisor_ot_rate = _setting(company_settings, "supervisor_ot_rate", SUPERVISOR_OT_RATE)
     if "semi" in value or "supervisor" in value:
-        return {"daily_rate": SUPERVISOR_DAILY_RATE, "ot_rate": SUPERVISOR_OT_RATE, "role_type": "Supervisor"}
-    return {"daily_rate": LABOUR_DAILY_RATE, "ot_rate": LABOUR_OT_RATE, "role_type": "Labour"}
+        return {"daily_rate": supervisor_daily_rate, "ot_rate": supervisor_ot_rate, "role_type": "Supervisor"}
+    return {"daily_rate": labour_daily_rate, "ot_rate": labour_ot_rate, "role_type": "Labour"}
 
 
-def calculate_wages(emp_record: Dict[str, object], month: int, default_other_deduction: float = 0.0) -> Dict[str, object]:
+def calculate_wages(
+    emp_record: Dict[str, object],
+    month: int,
+    default_other_deduction: float = 0.0,
+    company_settings: dict | None = None,
+) -> Dict[str, object]:
     """Calculate complete wage structure for one employee."""
     designation = str(emp_record.get("designation") or emp_record.get("grade") or "")
     present_days = float(emp_record.get("present_days", 0) or 0)
@@ -30,7 +46,7 @@ def calculate_wages(emp_record: Dict[str, object], month: int, default_other_ded
     advance = float(emp_record.get("advance", 0) or 0)
     other = float(emp_record.get("other_deduction", default_other_deduction) or 0)
 
-    rates = get_rates(designation)
+    rates = get_rates(designation, company_settings=company_settings)
     daily_rate = float(rates["daily_rate"])
     ot_rate = float(rates["ot_rate"])
 
@@ -38,9 +54,23 @@ def calculate_wages(emp_record: Dict[str, object], month: int, default_other_ded
     ot_amount = ot_hours * ot_rate
     gross_salary = basic_wages + ot_amount
 
-    pf_employee, pf_employer = calculate_pf(basic_wages)
-    esic_employee, esic_employer, esic_applicable = calculate_esic(gross_salary)
-    pt = calculate_pt(gross_salary, int(month))
+    pf_employee, pf_employer = calculate_pf(
+        basic_wages,
+        employee_rate=_setting(company_settings, "pf_employee_rate", 0.12),
+        employer_rate=_setting(company_settings, "pf_employer_rate", 0.13),
+    )
+    esic_employee, esic_employer, esic_applicable = calculate_esic(
+        gross_salary,
+        employee_rate=_setting(company_settings, "esic_employee_rate", 0.0075),
+        employer_rate=_setting(company_settings, "esic_employer_rate", 0.0325),
+        wage_ceiling=_setting(company_settings, "esic_wage_ceiling", 21000),
+    )
+    pt = calculate_pt(
+        gross_salary,
+        int(month),
+        pt_slabs=(company_settings or {}).get("pt_slabs"),
+        feb_additional=_setting(company_settings, "pt_feb_additional", 300),
+    )
 
     total_deductions = pf_employee + esic_employee + pt + advance + other
     net_payable = gross_salary - total_deductions
@@ -78,6 +108,7 @@ def calculate_wages(emp_record: Dict[str, object], month: int, default_other_ded
         "net_payable": _money(net_payable),
         "esic_applicable": bool(esic_applicable),
         "esic_remarks": "Applicable" if esic_applicable else "Not Applicable",
+        "company_id": emp_record.get("company_id"),
     }
 
 
@@ -86,6 +117,7 @@ def calculate_batch_wages(
     month: int,
     advances_map: Dict[str, float] | None = None,
     deductions_map: Dict[str, float] | None = None,
+    company_settings: dict | None = None,
 ) -> List[Dict[str, object]]:
     """Calculate payroll for multiple employees."""
     advances_map = advances_map or {}
@@ -96,7 +128,7 @@ def calculate_batch_wages(
         payload = dict(record)
         payload["advance"] = advances_map.get(emp_code, float(payload.get("advance", 0) or 0))
         payload["other_deduction"] = deductions_map.get(emp_code, float(payload.get("other_deduction", 0) or 0))
-        result.append(calculate_wages(payload, month=month))
+        result.append(calculate_wages(payload, month=month, company_settings=company_settings))
     return result
 
 

@@ -26,7 +26,11 @@ def _chunk(rows: list[list], size: int) -> list[list[list]]:
 
 
 def generate_wages_register_pdf(
-    employee_wages: Iterable[dict], month: int, year: int, output_dir: Path | None = None
+    employee_wages: Iterable[dict],
+    month: int,
+    year: int,
+    output_dir: Path | None = None,
+    company_config: dict | None = None,
 ) -> Path:
     """Generate wages register PDF (Form II style tabular summary)."""
     rows = list(employee_wages)
@@ -34,10 +38,12 @@ def generate_wages_register_pdf(
 
     doc = SimpleDocTemplate(str(out_file), pagesize=landscape(A4), leftMargin=8 * mm, rightMargin=8 * mm)
     styles = getSampleStyleSheet()
+    contractor_name = (company_config or {}).get("contractor_name", CONTRACTOR_NAME)
+    client_name = (company_config or {}).get("client_name", CLIENT_NAME)
     story = [
         Paragraph("FORM II (See Rule 27(1))", styles["Heading3"]),
         Paragraph(f"Register of Wages - {month_name(month)} {year}", styles["Title"]),
-        Paragraph(f"Contractor: {CONTRACTOR_NAME} | Principal Employer: {CLIENT_NAME}", styles["Normal"]),
+        Paragraph(f"Contractor: {contractor_name} | Principal Employer: {client_name}", styles["Normal"]),
         Spacer(1, 4),
     ]
 
@@ -158,16 +164,24 @@ def generate_wages_register_pdf(
     return out_file
 
 
-def generate_ot_register_pdf(employee_wages: Iterable[dict], month: int, year: int, output_dir: Path | None = None) -> Path:
+def generate_ot_register_pdf(
+    employee_wages: Iterable[dict],
+    month: int,
+    year: int,
+    output_dir: Path | None = None,
+    company_config: dict | None = None,
+) -> Path:
     """Generate OT register PDF (Form XIX style concise table)."""
     rows = list(employee_wages)
     out_file = _output_dir(month, year, output_dir) / f"OT_Register_{month_short_name(month)}_{year}.pdf"
     doc = SimpleDocTemplate(str(out_file), pagesize=A4, leftMargin=10 * mm, rightMargin=10 * mm)
     styles = getSampleStyleSheet()
+    contractor_name = (company_config or {}).get("contractor_name", CONTRACTOR_NAME)
+    client_name = (company_config or {}).get("client_name", CLIENT_NAME)
     story = [
         Paragraph("FORM XIX (See Rule 25(2))", styles["Heading3"]),
         Paragraph(f"Register of Overtime - {month_name(month)} {year}", styles["Title"]),
-        Paragraph(f"Contractor: {CONTRACTOR_NAME} | Principal Employer: {CLIENT_NAME}", styles["Normal"]),
+        Paragraph(f"Contractor: {contractor_name} | Principal Employer: {client_name}", styles["Normal"]),
         Spacer(1, 6),
     ]
 

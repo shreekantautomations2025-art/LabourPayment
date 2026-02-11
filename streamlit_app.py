@@ -19,8 +19,10 @@ from config import (
     PF_ESTABLISHMENT_CODE,
     PT_REGISTRATION_NO,
 )
+from modules.company_manager import CompanyManager
 from modules.employee_manager import EmployeeManager
 from modules.payroll_processor import create_payroll_preview, finalize_payroll_from_preview, process_monthly_payroll
+from ui_components.company_settings import render_company_settings
 from utils.helpers import ensure_base_directories, setup_logging
 from utils.ui_utils import (
     build_ui_temp_preview_path,
@@ -38,6 +40,13 @@ def _bootstrap() -> EmployeeManager:
     ensure_base_directories()
     setup_logging()
     return EmployeeManager()
+
+
+@st.cache_resource
+def _bootstrap_company_manager() -> CompanyManager:
+    ensure_base_directories()
+    setup_logging()
+    return CompanyManager()
 
 
 def _inject_custom_css() -> None:
@@ -247,7 +256,7 @@ def _gender_index(value: str) -> int:
     return 0
 
 
-def page_dashboard() -> None:
+def page_dashboard(selected_company: dict | None = None) -> None:
     _render_hero(
         "Payroll Dashboard",
         "Indian Labour Contractor Payroll Automation System",
@@ -255,13 +264,9 @@ def page_dashboard() -> None:
     )
 
     periods = discover_output_periods()
-    _render_metric_cards(
-        [
-            ("Output Periods", str(len(periods))),
-            ("Contractor", CONTRACTOR_NAME),
-            ("Client", CLIENT_NAME),
-        ]
-    )
+    contractor_name = (selected_company or {}).get("contractor_name", CONTRACTOR_NAME)
+    client_name = (selected_company or {}).get("client_name", CLIENT_NAME)
+    _render_metric_cards([("Output Periods", str(len(periods))), ("Contractor", contractor_name), ("Client", client_name)])
 
     if periods:
         latest = periods[0]
@@ -274,13 +279,16 @@ def page_dashboard() -> None:
         st.warning("No payroll output periods available yet. Process payroll to generate reports.")
 
 
-def page_employee_management(manager: EmployeeManager) -> None:
+def page_employee_management(manager: EmployeeManager, company_id: int | None) -> None:
     _render_hero(
         "Employee Management",
         "Add, edit, delete, filter, and bulk upload employee master records.",
         ["CRUD", "Bulk Upload", "Encrypted Fields"],
     )
     tabs = st.tabs(["View Employees", "Add Employee", "Edit Employee", "Delete Employee", "Bulk Upload"])
+    if company_id is None:
+        st.warning("Select a company from sidebar first.")
+        return
 
     with tabs[0]:
         st.subheader("View All Employees")
@@ -294,6 +302,7 @@ def page_employee_management(manager: EmployeeManager) -> None:
             "designation": designation.strip() or None,
             "department": department.strip() or None,
         }
+        filters["company_id"] = company_id
         rows = manager.get_all_employees(filters=filters, active_only=active_only)
         if not rows:
             st.info("No employees found.")
@@ -322,6 +331,7 @@ def page_employee_management(manager: EmployeeManager) -> None:
                 "uan_no": c1.text_input("UAN No"),
                 "esic_no": c2.text_input("ESIC No"),
                 "department": c1.text_input("Department"),
+                "company_id": company_id,
             }
             submitted = st.form_submit_button("Add Employee", use_container_width=True)
             if submitted:
@@ -339,7 +349,7 @@ def page_employee_management(manager: EmployeeManager) -> None:
 
     with tabs[2]:
         st.subheader("Edit Employee")
-        all_rows = manager.get_all_employees(active_only=False)
+        all_rows = manager.get_all_employees(filters={"company_id": company_id}, active_only=False)
         if not all_rows:
             st.info("No employees available for editing.")
         else:
@@ -370,6 +380,7 @@ def page_employee_management(manager: EmployeeManager) -> None:
                     "uan_no": c2.text_input("UAN No", value=str(current.get("uan_no", ""))),
                     "esic_no": c1.text_input("ESIC No", value=str(current.get("esic_no", ""))),
                     "department": c2.text_input("Department", value=str(current.get("department", ""))),
+                    "company_id": company_id,
                 }
                 submitted = st.form_submit_button("Save Changes", use_container_width=True)
                 if submitted:
@@ -386,7 +397,7 @@ def page_employee_management(manager: EmployeeManager) -> None:
 
     with tabs[3]:
         st.subheader("Delete Employee")
-        all_rows = manager.get_all_employees(active_only=False)
+        all_rows = manager.get_all_employees(filters={"company_id": company_id}, active_only=False)
         if not all_rows:
             st.info("No employees available for deletion.")
         else:
@@ -420,7 +431,7 @@ def page_employee_management(manager: EmployeeManager) -> None:
                 file_path = save_uploaded_file(uploaded, INPUT_DIR / "ui_uploads", prefix="employee_bulk")
                 result = _run_with_animation(
                     "Processing bulk upload",
-                    lambda: manager.bulk_upload_employees(file_path),
+                    lambda: manager.bulk_upload_employees(file_path, company_id=company_id),
                     steps=["Saving uploaded file", "Validating and upserting records", "Creating summary response"],
                 )
                 st.success("Bulk upload processed.")
@@ -429,13 +440,16 @@ def page_employee_management(manager: EmployeeManager) -> None:
                 st.error(f"Bulk upload failed: {exc}")
 
 
-def page_payroll_processing(manager: EmployeeManager) -> None:
+def page_payroll_processing(manager: EmployeeManager, company_id: int | None) -> None:
     _render_hero(
         "Monthly Payroll Processing",
         "Run direct payroll or use preview -> approve -> finalize flow.",
         ["Validation", "Preview Mode", "Automated Reports", "ECR + NACH"],
     )
     preview_tab, direct_tab = st.tabs(["Preview -> Approve -> Finalize", "Direct Processing"])
+    if company_id is None:
+        st.warning("Select a company from sidebar first.")
+        return
 
     with preview_tab:
         st.subheader("Create Editable Preview")
@@ -468,6 +482,7 @@ def page_payroll_processing(manager: EmployeeManager) -> None:
                             month=int(month),
                             year=int(year),
                             employee_manager=manager,
+                            company_id=company_id,
                             adjustments_file=adjustments_path,
                         ),
                         steps=[
@@ -479,6 +494,7 @@ def page_payroll_processing(manager: EmployeeManager) -> None:
                     st.session_state["ui_preview_result"] = result
                     st.session_state["ui_preview_month"] = int(month)
                     st.session_state["ui_preview_year"] = int(year)
+                    st.session_state["ui_preview_company_id"] = int(company_id)
                     st.toast("Preview workbook created", icon="📄")
                     st.success("Preview workbook generated successfully.")
                 except Exception as exc:  # noqa: BLE001
@@ -526,6 +542,7 @@ def page_payroll_processing(manager: EmployeeManager) -> None:
                                 month=int(st.session_state["ui_preview_month"]),
                                 year=int(st.session_state["ui_preview_year"]),
                                 employee_manager=manager,
+                                company_id=int(st.session_state.get("ui_preview_company_id", company_id)),
                                 require_approved_rows=True,
                             ),
                             steps=[
@@ -559,6 +576,7 @@ def page_payroll_processing(manager: EmployeeManager) -> None:
                                 month=int(st.session_state["ui_preview_month"]),
                                 year=int(st.session_state["ui_preview_year"]),
                                 employee_manager=manager,
+                                company_id=int(st.session_state.get("ui_preview_company_id", company_id)),
                                 require_approved_rows=True,
                             ),
                             steps=[
@@ -609,6 +627,7 @@ def page_payroll_processing(manager: EmployeeManager) -> None:
                             month=int(month_direct),
                             year=int(year_direct),
                             employee_manager=manager,
+                            company_id=company_id,
                             adjustments_file=adjustments_path,
                             require_clean_validation=True,
                         ),
@@ -632,7 +651,7 @@ def page_payroll_processing(manager: EmployeeManager) -> None:
         _render_processing_summary(final_result)
 
 
-def page_reports() -> None:
+def page_reports(company_id: int | None) -> None:
     _render_hero(
         "Reports & Documents",
         "Browse monthly generated files and download reports instantly.",
@@ -645,6 +664,8 @@ def page_reports() -> None:
 
     selected = st.selectbox("Select output period (YYYY_MM)", periods)
     files = list_output_files(selected, extensions=[".xlsx", ".pdf", ".csv"])
+    if company_id is not None:
+        files = [f for f in files if f"company_{company_id}" in str(f)]
     if not files:
         st.warning("No files in selected period.")
         return
@@ -664,7 +685,7 @@ def page_reports() -> None:
         )
 
 
-def page_payment_guidance() -> None:
+def page_payment_guidance(selected_company: dict | None) -> None:
     _render_hero(
         "Payment Guidance",
         "Step-by-step statutory and bank payment instructions (guidance only).",
@@ -672,25 +693,28 @@ def page_payment_guidance() -> None:
     )
     st.info("This system does not auto-pay challans. It only provides guidance and reports.")
 
+    pf_code = (selected_company or {}).get("pf_establishment_code", PF_ESTABLISHMENT_CODE)
+    esic_code = (selected_company or {}).get("esic_employer_code", ESIC_EMPLOYER_CODE)
+    pt_code = (selected_company or {}).get("pt_registration_no", PT_REGISTRATION_NO)
     st.markdown(
         f"""
 ### PF Payment
 - Portal: https://unifiedportal-mem.epfindia.gov.in
 - Upload ECR generated by system
 - Due Date: 15th of next month
-- Establishment Code: **{PF_ESTABLISHMENT_CODE}**
+- Establishment Code: **{pf_code}**
 
 ### ESIC Payment
 - Portal: https://portal.esic.in
 - Enter monthly contribution and pay online
 - Due Date: 15th of next month
-- Employer Code: **{ESIC_EMPLOYER_CODE}**
+- Employer Code: **{esic_code}**
 
 ### Professional Tax (Maharashtra)
 - Portal: Maharashtra State Tax Portal
 - Monthly return + challan payment
 - Due Date: 21st of next month
-- Registration No: **{PT_REGISTRATION_NO or 'N/A'}**
+- Registration No: **{pt_code or 'N/A'}**
 
 ### Bank Salary Payment
 - Use `Bank_Payment_*.xlsx` (NEFT / NACH sheets)
@@ -715,7 +739,7 @@ def page_payment_guidance() -> None:
             )
 
 
-def page_configuration() -> None:
+def page_configuration(selected_company: dict | None) -> None:
     _render_hero(
         "Configuration Snapshot",
         "Read-only values loaded from current configuration.",
@@ -723,11 +747,17 @@ def page_configuration() -> None:
     )
     st.caption("Read-only configuration currently loaded by system.")
     config_payload = {
-        "contractor_name": CONTRACTOR_NAME,
-        "client_name": CLIENT_NAME,
-        "pf_establishment_code": PF_ESTABLISHMENT_CODE,
-        "esic_employer_code": ESIC_EMPLOYER_CODE,
-        "pt_registration_no": PT_REGISTRATION_NO or "",
+        "company_id": (selected_company or {}).get("company_id"),
+        "company_name": (selected_company or {}).get("company_name", CONTRACTOR_NAME),
+        "contractor_name": (selected_company or {}).get("contractor_name", CONTRACTOR_NAME),
+        "client_name": (selected_company or {}).get("client_name", CLIENT_NAME),
+        "pf_establishment_code": (selected_company or {}).get("pf_establishment_code", PF_ESTABLISHMENT_CODE),
+        "esic_employer_code": (selected_company or {}).get("esic_employer_code", ESIC_EMPLOYER_CODE),
+        "pt_registration_no": (selected_company or {}).get("pt_registration_no", PT_REGISTRATION_NO) or "",
+        "labour_daily_rate": (selected_company or {}).get("labour_daily_rate"),
+        "supervisor_daily_rate": (selected_company or {}).get("supervisor_daily_rate"),
+        "labour_ot_rate": (selected_company or {}).get("labour_ot_rate"),
+        "supervisor_ot_rate": (selected_company or {}).get("supervisor_ot_rate"),
     }
     st.json(config_payload)
 
@@ -736,8 +766,29 @@ def run_app() -> None:
     st.set_page_config(page_title="Indian Labour Payroll Automation", layout="wide")
     _inject_custom_css()
     manager = _bootstrap()
+    company_manager = _bootstrap_company_manager()
 
     st.sidebar.title("Payroll Automation")
+    companies = company_manager.get_all_companies(active_only=True)
+    selected_company_id: int | None = st.session_state.get("active_company_id")
+
+    if companies:
+        options = {f"{c['company_id']} | {c['company_name']}": int(c["company_id"]) for c in companies}
+        labels = list(options.keys())
+        default_index = 0
+        if selected_company_id is not None:
+            for idx, label in enumerate(labels):
+                if options[label] == int(selected_company_id):
+                    default_index = idx
+                    break
+        selected_label = st.sidebar.selectbox("Active Company", labels, index=default_index)
+        selected_company_id = options[selected_label]
+        st.session_state["active_company_id"] = selected_company_id
+        selected_company = company_manager.get_company(selected_company_id)
+    else:
+        selected_company = None
+        st.sidebar.warning("No active company found. Create one in Company Settings.")
+
     page = st.sidebar.radio(
         "Navigate",
         [
@@ -745,23 +796,28 @@ def run_app() -> None:
             "Employee Management",
             "Payroll Processing",
             "Reports & Documents",
+            "Company Settings",
             "Payment Guidance",
             "Configuration",
         ],
     )
 
     if page == "Dashboard":
-        page_dashboard()
+        page_dashboard(selected_company=selected_company)
     elif page == "Employee Management":
-        page_employee_management(manager)
+        page_employee_management(manager, selected_company_id)
     elif page == "Payroll Processing":
-        page_payroll_processing(manager)
+        page_payroll_processing(manager, selected_company_id)
     elif page == "Reports & Documents":
-        page_reports()
+        page_reports(selected_company_id)
+    elif page == "Company Settings":
+        new_company_id = render_company_settings(company_manager, selected_company_id)
+        if new_company_id is not None:
+            st.session_state["active_company_id"] = int(new_company_id)
     elif page == "Payment Guidance":
-        page_payment_guidance()
+        page_payment_guidance(selected_company)
     else:
-        page_configuration()
+        page_configuration(selected_company)
 
     st.sidebar.markdown("---")
     st.sidebar.caption("For CLI usage: python3 main.py --help")

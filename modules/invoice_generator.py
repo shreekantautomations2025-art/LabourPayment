@@ -40,6 +40,12 @@ def _money(value: float) -> float:
     return round(float(value), 2)
 
 
+def _cfg(company_config: dict | None, key: str, default):
+    if company_config is None:
+        return default
+    return company_config.get(key, default)
+
+
 def _output_dir(month: int, year: int, output_dir: Path | None = None) -> Path:
     base = output_dir or (OUTPUT_DIR / f"{year}_{month:02d}")
     base.mkdir(parents=True, exist_ok=True)
@@ -104,6 +110,7 @@ def _generate_invoice_pdf(
     line_rows: list[list[object]],
     subtotal: float,
     title: str,
+    company_config: dict | None = None,
 ) -> Path:
     styles = _make_styles()
     doc = SimpleDocTemplate(str(out_file), pagesize=A4, rightMargin=15 * mm, leftMargin=15 * mm, topMargin=12 * mm)
@@ -116,10 +123,21 @@ def _generate_invoice_pdf(
         [
             [
                 Paragraph(
-                    f"<b>FROM:</b><br/>{CONTRACTOR_NAME}<br/>{CONTRACTOR_ADDRESS}<br/>GSTIN: {CONTRACTOR_GSTIN or 'N/A'}",
+                    (
+                        f"<b>FROM:</b><br/>{_cfg(company_config, 'contractor_name', CONTRACTOR_NAME)}"
+                        f"<br/>{_cfg(company_config, 'contractor_address', CONTRACTOR_ADDRESS)}"
+                        f"<br/>GSTIN: {_cfg(company_config, 'contractor_gstin', CONTRACTOR_GSTIN) or 'N/A'}"
+                    ),
                     styles["Small"],
                 ),
-                Paragraph(f"<b>TO:</b><br/>{CLIENT_NAME}<br/>{CLIENT_ADDRESS}<br/>GSTIN: {CLIENT_GSTIN or 'N/A'}", styles["Small"]),
+                Paragraph(
+                    (
+                        f"<b>TO:</b><br/>{_cfg(company_config, 'client_name', CLIENT_NAME)}"
+                        f"<br/>{_cfg(company_config, 'client_address', CLIENT_ADDRESS)}"
+                        f"<br/>GSTIN: {_cfg(company_config, 'client_gstin', CLIENT_GSTIN) or 'N/A'}"
+                    ),
+                    styles["Small"],
+                ),
             ]
         ],
         colWidths=[90 * mm, 90 * mm],
@@ -143,7 +161,7 @@ def _generate_invoice_pdf(
     meta = Table(
         [
             [f"Invoice No: {invoice_no}", f"Date: {date.today().isoformat()}"],
-            [f"Period: {month_name(month)} {year}", f"Payment Terms: {INVOICE_PAYMENT_TERMS}"],
+            [f"Period: {month_name(month)} {year}", f"Payment Terms: {_cfg(company_config, 'payment_terms', INVOICE_PAYMENT_TERMS)}"],
             [f"Invoice Type: {title}", ""],
         ],
         colWidths=[90 * mm, 90 * mm],
@@ -170,11 +188,13 @@ def _generate_invoice_pdf(
     story.append(line_table)
     story.append(Spacer(1, 10))
 
-    gst_amount = _money(subtotal * GST_RATE) if GST_APPLICABLE else 0.0
+    gst_applicable = bool(_cfg(company_config, "gst_applicable", GST_APPLICABLE))
+    gst_rate = float(_cfg(company_config, "gst_rate", GST_RATE))
+    gst_amount = _money(subtotal * gst_rate) if gst_applicable else 0.0
     total = _money(subtotal + gst_amount)
     summary = [
         ["Sub Total", f"₹{subtotal:,.2f}"],
-        ["GST @ 18%" if GST_APPLICABLE else "GST", f"₹{gst_amount:,.2f}"],
+        [f"GST @ {gst_rate * 100:.0f}%" if gst_applicable else "GST", f"₹{gst_amount:,.2f}"],
         ["TOTAL", f"₹{total:,.2f}"],
     ]
     summary_table = Table(summary, colWidths=[110 * mm, 40 * mm], hAlign="RIGHT")
@@ -195,16 +215,21 @@ def _generate_invoice_pdf(
         Paragraph(
             (
                 "<b>Bank Details:</b><br/>"
-                f"Account Name: {CONTRACTOR_NAME}<br/>"
-                f"Bank: {CONTRACTOR_BANK_NAME or 'N/A'}<br/>"
-                f"Account No: {CONTRACTOR_BANK_ACCOUNT or 'N/A'}<br/>"
-                f"IFSC: {CONTRACTOR_IFSC or 'N/A'}"
+                f"Account Name: {_cfg(company_config, 'contractor_name', CONTRACTOR_NAME)}<br/>"
+                f"Bank: {_cfg(company_config, 'contractor_bank_name', CONTRACTOR_BANK_NAME) or 'N/A'}<br/>"
+                f"Account No: {_cfg(company_config, 'contractor_bank_account', CONTRACTOR_BANK_ACCOUNT) or 'N/A'}<br/>"
+                f"IFSC: {_cfg(company_config, 'contractor_ifsc', CONTRACTOR_IFSC) or 'N/A'}"
             ),
             styles["Small"],
         )
     )
     story.append(Spacer(1, 20))
-    story.append(Paragraph(f"For {CONTRACTOR_NAME}<br/><br/>Authorized Signatory", styles["Small"]))
+    story.append(
+        Paragraph(
+            f"For {_cfg(company_config, 'contractor_name', CONTRACTOR_NAME)}<br/><br/>Authorized Signatory",
+            styles["Small"],
+        )
+    )
 
     doc.build(story)
     return out_file
@@ -216,6 +241,7 @@ def generate_md_invoice(
     dept_summary: pd.DataFrame | Iterable[dict],
     output_dir: Path | None = None,
     invoice_no: str | None = None,
+    company_config: dict | None = None,
 ) -> Path:
     """Generate MD (normal wages/man-days) invoice PDF."""
     df = _to_dataframe(dept_summary)
@@ -232,7 +258,8 @@ def generate_md_invoice(
         subtotal += amount
         rows.append([idx, dept, f"{days:,.2f}", f"{rate:,.2f}", f"{amount:,.2f}"])
 
-    invoice_no = invoice_no or _next_invoice_no(INVOICE_PREFIX_MD, year)
+    invoice_prefix_md = str(_cfg(company_config, "invoice_prefix_md", INVOICE_PREFIX_MD))
+    invoice_no = invoice_no or _next_invoice_no(invoice_prefix_md, year)
     out_file = _output_dir(month, year, output_dir) / f"MD_Invoice_{month_short_name(month)}_{year}_{invoice_no.replace('/', '_')}.pdf"
     return _generate_invoice_pdf(
         out_file=out_file,
@@ -243,6 +270,7 @@ def generate_md_invoice(
         line_rows=rows,
         subtotal=_money(subtotal),
         title="MD Invoice",
+        company_config=company_config,
     )
 
 
@@ -252,6 +280,7 @@ def generate_ot_invoice(
     dept_summary: pd.DataFrame | Iterable[dict],
     output_dir: Path | None = None,
     invoice_no: str | None = None,
+    company_config: dict | None = None,
 ) -> Path:
     """Generate OT (overtime) invoice PDF."""
     df = _to_dataframe(dept_summary)
@@ -268,7 +297,8 @@ def generate_ot_invoice(
         subtotal += amount
         rows.append([idx, dept, f"{hrs:,.2f}", f"{rate:,.2f}", f"{amount:,.2f}"])
 
-    invoice_no = invoice_no or _next_invoice_no(INVOICE_PREFIX_OT, year)
+    invoice_prefix_ot = str(_cfg(company_config, "invoice_prefix_ot", INVOICE_PREFIX_OT))
+    invoice_no = invoice_no or _next_invoice_no(invoice_prefix_ot, year)
     out_file = _output_dir(month, year, output_dir) / f"OT_Invoice_{month_short_name(month)}_{year}_{invoice_no.replace('/', '_')}.pdf"
     return _generate_invoice_pdf(
         out_file=out_file,
@@ -279,5 +309,6 @@ def generate_ot_invoice(
         line_rows=rows,
         subtotal=_money(subtotal),
         title="OT Invoice",
+        company_config=company_config,
     )
 

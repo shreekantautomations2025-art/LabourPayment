@@ -35,6 +35,7 @@ def _build_employee_payload(args: argparse.Namespace, existing: dict | None = No
         "uan_no": args.uan_no,
         "esic_no": args.esic_no,
         "department": args.department,
+        "company_id": getattr(args, "company_id", None),
     }
     for key, value in mapping.items():
         if value is not None:
@@ -65,7 +66,12 @@ def handle_employee_command(args: argparse.Namespace, manager: EmployeeManager) 
         return 0 if ok else 1
 
     if args.employee_action == "list":
-        filters = {"search": args.search, "designation": args.designation_filter, "department": args.department_filter}
+        filters = {
+            "search": args.search,
+            "designation": args.designation_filter,
+            "department": args.department_filter,
+            "company_id": args.company_id,
+        }
         rows = manager.get_all_employees(filters=filters, active_only=not args.include_inactive)
         if not rows:
             print("No employees found.")
@@ -79,7 +85,7 @@ def handle_employee_command(args: argparse.Namespace, manager: EmployeeManager) 
         return 0
 
     if args.employee_action == "bulk-upload":
-        result = manager.bulk_upload_employees(args.file)
+        result = manager.bulk_upload_employees(args.file, company_id=args.company_id)
         print(json.dumps(result, indent=2))
         return 0 if result["failed"] == 0 else 1
 
@@ -100,6 +106,7 @@ def handle_payroll_process(args: argparse.Namespace, manager: EmployeeManager) -
             month=month,
             year=year,
             employee_manager=manager,
+            company_id=args.company_id,
             adjustments_file=args.adjustments_file,
         )
         print("\nPreview generated successfully. Edit and approve rows before finalization.")
@@ -108,8 +115,9 @@ def handle_payroll_process(args: argparse.Namespace, manager: EmployeeManager) -
         print(f"python main.py finalize-payroll --preview-file \"{preview_result['preview_file']}\" --month {month} --year {year}")
         return 0
 
-    parsed_df = parse_muster_roll(args.muster_file, employee_manager=manager)
-    master_rows = manager.get_all_employees(active_only=True)
+    parsed_df = parse_muster_roll(args.muster_file, employee_manager=manager, company_id=args.company_id)
+    master_filters = {"company_id": args.company_id} if args.company_id is not None else None
+    master_rows = manager.get_all_employees(active_only=True, filters=master_filters)
     master_codes = {r["emp_code"] for r in master_rows}
     master_designations = {r["emp_code"]: r["designation"] for r in master_rows}
     is_valid, errors, warnings = validate_muster_roll(parsed_df, master_codes, master_designations)
@@ -138,6 +146,7 @@ def handle_payroll_process(args: argparse.Namespace, manager: EmployeeManager) -
         month=month,
         year=year,
         employee_manager=manager,
+        company_id=args.company_id,
         adjustments_file=args.adjustments_file,
         require_clean_validation=True,
     )
@@ -159,6 +168,7 @@ def handle_finalize_payroll(args: argparse.Namespace, manager: EmployeeManager) 
         month=month,
         year=year,
         employee_manager=manager,
+        company_id=args.company_id,
         require_approved_rows=True,
     )
     print("\nPayroll finalized from preview.")
@@ -248,6 +258,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("--uan-no", dict(required=False)),
         ("--esic-no", dict(required=False)),
         ("--department", dict(required=False)),
+        ("--company-id", dict(required=False, type=int)),
     ]
 
     add = emp_sub.add_parser("add", help="Add a new employee")
@@ -284,9 +295,11 @@ def build_parser() -> argparse.ArgumentParser:
     list_cmd.add_argument("--designation-filter")
     list_cmd.add_argument("--department-filter")
     list_cmd.add_argument("--include-inactive", action="store_true")
+    list_cmd.add_argument("--company-id", type=int)
 
     bulk = emp_sub.add_parser("bulk-upload", help="Bulk upload from excel")
     bulk.add_argument("--file", required=True)
+    bulk.add_argument("--company-id", type=int, help="Assign uploaded employees to company ID")
 
     export = emp_sub.add_parser("export", help="Export employees to excel")
     export.add_argument("--output", required=True)
@@ -296,6 +309,7 @@ def build_parser() -> argparse.ArgumentParser:
     payroll.add_argument("--muster-file", required=True)
     payroll.add_argument("--month", required=True, type=int)
     payroll.add_argument("--year", required=True, type=int)
+    payroll.add_argument("--company-id", type=int, help="Process payroll for selected company")
     payroll.add_argument("--adjustments-file")
     payroll.add_argument("--preview-only", action="store_true", help="Create editable preview and stop")
     payroll.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
@@ -304,6 +318,7 @@ def build_parser() -> argparse.ArgumentParser:
     finalize.add_argument("--preview-file", required=True)
     finalize.add_argument("--month", required=True, type=int)
     finalize.add_argument("--year", required=True, type=int)
+    finalize.add_argument("--company-id", type=int, help="Finalize payroll for selected company")
     finalize.add_argument("--yes", action="store_true", help="Skip confirmation prompt")
 
     return parser

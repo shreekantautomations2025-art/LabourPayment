@@ -3,6 +3,7 @@
 Production-grade Python payroll automation for Indian labour contractors with:
 
 - Employee master management (CRUD + bulk upload)
+- Multi-company configuration (company-wise rates and statutory settings)
 - Muster roll parsing (two-row format: data row + time row)
 - Wage/statutory calculations (PF/ESIC/PT + advances + other deductions)
 - Multi-output document generation (Excel + PDF)
@@ -18,6 +19,17 @@ Production-grade Python payroll automation for Indian labour contractors with:
 - Bulk upload from Excel template
 - Search and filter by code/name/designation/department
 - Sensitive fields encrypted at rest (bank account, PAN, Aadhaar)
+- Company-wise employee mapping (`company_id`)
+
+### Company Configuration
+- Manage multiple contractors/companies from UI
+- Company-specific:
+  - contractor/client details
+  - wage rates
+  - PF/ESIC/PT settings
+  - invoice settings
+- Import/export company config as JSON
+- Select active company from sidebar
 
 ### Monthly Payroll Processing
 - Parse uploaded muster roll Excel files
@@ -62,6 +74,7 @@ Production-grade Python payroll automation for Indian labour contractors with:
 ├── requirements.txt
 ├── modules/
 │   ├── employee_manager.py
+│   ├── company_manager.py
 │   ├── muster_parser.py
 │   ├── validators.py
 │   ├── statutory_calculator.py
@@ -78,6 +91,8 @@ Production-grade Python payroll automation for Indian labour contractors with:
 │   ├── number_to_words.py
 │   └── ui_utils.py
 ├── templates/
+├── ui_components/
+│   └── company_settings.py
 ├── data/
 ├── input/
 ├── output/
@@ -111,6 +126,7 @@ The UI provides:
 - Payroll preview -> approve -> finalize workflow
 - Direct payroll processing option
 - Report/document browser with download buttons
+- Company settings module for multi-contractor configuration
 - Payment guidance view and payment instruction PDF download
 - Animated gradient dashboard, live status loaders, and success effects
 
@@ -150,7 +166,8 @@ python main.py employee list --search Ravi
 python main.py process-payroll \
   --muster-file input/muster_rolls/Shankar_Patil_MusterRoll_Nov_2025_updated_1.xlsx \
   --month 11 \
-  --year 2025
+  --year 2025 \
+  --company-id 1
 ```
 
 For non-interactive runs:
@@ -176,6 +193,7 @@ python main.py finalize-payroll \
   --preview-file output/2025_11/Payroll_Preview_2025_11.xlsx \
   --month 11 \
   --year 2025 \
+  --company-id 1 \
   --yes
 ```
 
@@ -193,6 +211,7 @@ python main.py
 - Reports & Documents
 - Payment Guidance
 - Configuration Snapshot
+- Company Settings (multi-company CRUD and rates)
 
 ---
 
@@ -227,6 +246,7 @@ Included tests:
 - Preview/finalize integration test
 - Optional real sample muster regression test (auto-skips if sample file is absent)
 - UI utility tests
+- Multi-company configuration tests
 
 ---
 

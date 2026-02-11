@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import pandas as pd
 
 from config import EMPLOYEE_DB_PATH
+from modules.company_manager import CompanyManager
 from modules.validators import normalize_designation, normalize_gender, validate_employee_data
 from utils.date_utils import parse_flexible_date
 from utils.helpers import backup_file, log_audit
@@ -52,14 +53,20 @@ class EmployeeManager:
                     uan_no TEXT,
                     esic_no TEXT,
                     department TEXT,
+                    company_id INTEGER,
                     is_active INTEGER NOT NULL DEFAULT 1,
                     created_date TEXT NOT NULL,
                     updated_date TEXT NOT NULL
                 )
                 """
             )
+            cursor = conn.execute("PRAGMA table_info(employees)")
+            columns = {row["name"] for row in cursor.fetchall()}
+            if "company_id" not in columns:
+                conn.execute("ALTER TABLE employees ADD COLUMN company_id INTEGER")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_employees_name ON employees(emp_name)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_employees_active ON employees(is_active)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_employees_company ON employees(company_id)")
             conn.commit()
 
     @staticmethod
@@ -80,6 +87,11 @@ class EmployeeManager:
         clean["uan_no"] = str(clean.get("uan_no", "")).strip()
         clean["esic_no"] = str(clean.get("esic_no", "")).strip()
         clean["department"] = str(clean.get("department", "")).strip()
+        company_id = clean.get("company_id")
+        try:
+            clean["company_id"] = int(company_id) if company_id not in (None, "", "nan") else None
+        except (TypeError, ValueError):
+            clean["company_id"] = None
         return clean
 
     @staticmethod
@@ -111,11 +123,14 @@ class EmployeeManager:
             rows = conn.execute(query, params).fetchall()
         return [str(r["emp_code"]) for r in rows]
 
-    def get_employee(self, emp_code: str, include_inactive: bool = True) -> Optional[Dict[str, Any]]:
+    def get_employee(self, emp_code: str, include_inactive: bool = True, company_id: int | None = None) -> Optional[Dict[str, Any]]:
         query = "SELECT * FROM employees WHERE emp_code = ?"
         params: tuple[Any, ...] = (emp_code,)
         if not include_inactive:
             query += " AND is_active = 1"
+        if company_id is not None:
+            query += " AND company_id = ?"
+            params += (int(company_id),)
         with self._connect() as conn:
             row = conn.execute(query, params).fetchone()
         if not row:
@@ -125,6 +140,8 @@ class EmployeeManager:
     def add_employee(self, emp_data: Dict[str, Any], raise_on_error: bool = False) -> bool:
         """Add employee to master table."""
         clean = self._sanitize_input(emp_data)
+        if clean.get("company_id") is None:
+            clean["company_id"] = CompanyManager(self.db_path).get_default_company_id()
         valid, errors = validate_employee_data(clean, existing_codes=self.get_employee_codes(active_only=False))
         if not valid:
             if raise_on_error:
@@ -143,8 +160,8 @@ class EmployeeManager:
                 INSERT INTO employees (
                     emp_code, emp_name, father_husband_name, dob, gender, designation,
                     doj, bank_account_no, ifsc_code, bank_name, pan_no, aadhaar_no,
-                    uan_no, esic_no, department, is_active, created_date, updated_date
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    uan_no, esic_no, department, is_active, created_date, updated_date, company_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     clean_enc["emp_code"],
@@ -165,6 +182,7 @@ class EmployeeManager:
                     clean_enc["is_active"],
                     clean_enc["created_date"],
                     clean_enc["updated_date"],
+                    clean_enc["company_id"],
                 ),
             )
             conn.commit()
@@ -181,6 +199,8 @@ class EmployeeManager:
         merged = {**current, **updated_data}
         merged["emp_code"] = emp_code
         clean = self._sanitize_input(merged)
+        if clean.get("company_id") is None:
+            clean["company_id"] = current.get("company_id") or CompanyManager(self.db_path).get_default_company_id()
 
         existing_codes = set(self.get_employee_codes(active_only=False))
         existing_codes.discard(emp_code)
@@ -201,7 +221,7 @@ class EmployeeManager:
                 UPDATE employees
                 SET emp_name=?, father_husband_name=?, dob=?, gender=?, designation=?,
                     doj=?, bank_account_no=?, ifsc_code=?, bank_name=?, pan_no=?, aadhaar_no=?,
-                    uan_no=?, esic_no=?, department=?, is_active=?, updated_date=?
+                    uan_no=?, esic_no=?, department=?, company_id=?, is_active=?, updated_date=?
                 WHERE emp_code=?
                 """,
                 (
@@ -219,6 +239,7 @@ class EmployeeManager:
                     clean_enc["uan_no"],
                     clean_enc["esic_no"],
                     clean_enc["department"],
+                    clean_enc["company_id"],
                     clean_enc["is_active"],
                     clean_enc["updated_date"],
                     emp_code,
@@ -267,6 +288,9 @@ class EmployeeManager:
         if filters.get("ifsc_code"):
             query += " AND ifsc_code = ?"
             params.append(str(filters["ifsc_code"]).strip().upper())
+        if filters.get("company_id") is not None:
+            query += " AND company_id = ?"
+            params.append(int(filters["company_id"]))
 
         query += " ORDER BY emp_name ASC"
         with self._connect() as conn:
@@ -305,7 +329,7 @@ class EmployeeManager:
             normalized_cols[col] = mapping.get(key, key.replace(" ", "_"))
         return df.rename(columns=normalized_cols)
 
-    def bulk_upload_employees(self, excel_file: str | Path) -> Dict[str, Any]:
+    def bulk_upload_employees(self, excel_file: str | Path, company_id: int | None = None) -> Dict[str, Any]:
         """Bulk upload employee records from excel file."""
         file_path = Path(excel_file)
         if not file_path.exists():
@@ -319,6 +343,8 @@ class EmployeeManager:
         result = {"success": 0, "failed": 0, "errors": []}
         for idx, record in enumerate(records, start=2):
             payload = {k: ("" if pd.isna(v) else v) for k, v in record.items()}
+            if company_id is not None:
+                payload["company_id"] = int(company_id)
             emp_code = str(payload.get("emp_code", "")).strip()
             if not emp_code:
                 result["failed"] += 1
@@ -383,6 +409,6 @@ def get_all_employees(filters: dict | None = None, active_only: bool = True) -> 
     return get_manager().get_all_employees(filters=filters, active_only=active_only)
 
 
-def bulk_upload_employees(excel_file: str) -> Dict[str, Any]:
-    return get_manager().bulk_upload_employees(excel_file)
+def bulk_upload_employees(excel_file: str, company_id: int | None = None) -> Dict[str, Any]:
+    return get_manager().bulk_upload_employees(excel_file, company_id=company_id)
 
