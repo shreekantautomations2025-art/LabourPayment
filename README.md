@@ -57,6 +57,7 @@ Production-grade Python payroll automation for Indian labour contractors with:
 .
 ├── config.py
 ├── main.py
+├── streamlit_app.py
 ├── setup.py
 ├── requirements.txt
 ├── modules/
@@ -74,13 +75,15 @@ Production-grade Python payroll automation for Indian labour contractors with:
 │   ├── helpers.py
 │   ├── security.py
 │   ├── date_utils.py
-│   └── number_to_words.py
+│   ├── number_to_words.py
+│   └── ui_utils.py
 ├── templates/
 ├── data/
 ├── input/
 ├── output/
 ├── logs/
 └── tests/
+    └── test_ui_utils.py
 ```
 
 ---
@@ -97,6 +100,18 @@ python setup.py init_db
 ---
 
 ## Usage
+
+### 0) Run Streamlit UI (recommended)
+```bash
+streamlit run streamlit_app.py
+```
+
+The UI provides:
+- Employee CRUD + bulk upload
+- Payroll preview -> approve -> finalize workflow
+- Direct payroll processing option
+- Report/document browser with download buttons
+- Payment guidance view and payment instruction PDF download
 
 ### 1) Initialize DB
 ```bash
@@ -168,6 +183,16 @@ python main.py finalize-payroll \
 python main.py
 ```
 
+### 6) Streamlit Pages
+- Dashboard
+- Employee Management
+- Payroll Processing
+  - Preview -> Approve -> Finalize
+  - Direct processing
+- Reports & Documents
+- Payment Guidance
+- Configuration Snapshot
+
 ---
 
 ## Data and Archive Policy
@@ -200,6 +225,7 @@ Included tests:
 - End-to-end monthly processing integration test
 - Preview/finalize integration test
 - Optional real sample muster regression test (auto-skips if sample file is absent)
+- UI utility tests
 
 ---
 
