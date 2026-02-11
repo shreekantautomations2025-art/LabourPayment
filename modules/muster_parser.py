@@ -12,6 +12,7 @@ from modules.employee_manager import EmployeeManager, get_manager
 
 _TIME_RE = re.compile(r"^\d{1,2}:\d{2}$")
 _SUMMARY_RE = re.compile(r"(summary|grand\s*total|total|paydays?)", re.IGNORECASE)
+_EMP_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-./]{0,39}$")
 
 
 def _normalize_header(text: object) -> str:
@@ -107,6 +108,53 @@ def _is_summary_row(emp_code: str, emp_name: str, department: str, slno: str) ->
     return bool(blob and _SUMMARY_RE.search(blob))
 
 
+def _emp_code_candidates(value: object) -> list[str]:
+    raw = str(value or "").strip()
+    if not raw or raw.lower() == "nan":
+        return []
+
+    candidates: list[str] = [raw]
+    compact = raw.replace(" ", "")
+    if compact not in candidates:
+        candidates.append(compact)
+
+    # Excel numeric coercion can convert '000281' -> 281 or 281.0
+    numeric_text = compact
+    if re.fullmatch(r"\d+(\.0+)?", numeric_text):
+        number = str(int(float(numeric_text)))
+        if number not in candidates:
+            candidates.append(number)
+        if number.lstrip("0") and number.lstrip("0") not in candidates:
+            candidates.append(number.lstrip("0"))
+        # Common employee code width in labour payroll sheets.
+        if number.zfill(6) not in candidates:
+            candidates.append(number.zfill(6))
+    return candidates
+
+
+def _resolve_emp_code(value: object, master_by_code: dict[str, dict]) -> str:
+    candidates = _emp_code_candidates(value)
+    if not candidates:
+        return ""
+    for candidate in candidates:
+        if candidate in master_by_code:
+            canonical = str(master_by_code[candidate].get("emp_code", "")).strip()
+            return canonical or candidate
+    return candidates[0]
+
+
+def _looks_like_employee_code(emp_code: str) -> bool:
+    code = str(emp_code or "").strip()
+    if not code:
+        return False
+    if not _EMP_CODE_RE.match(code):
+        return False
+    # Reject obvious descriptive strings with no digits.
+    if " " in code:
+        return False
+    return True
+
+
 def parse_muster_roll(
     excel_file: str | Path,
     employee_manager: EmployeeManager | None = None,
@@ -149,7 +197,14 @@ def parse_muster_roll(
     manager = employee_manager or get_manager()
     master_filters = {"company_id": int(company_id)} if company_id is not None else None
     master_rows = manager.get_all_employees(filters=master_filters, active_only=False)
-    master_by_code = {str(row["emp_code"]).strip(): row for row in master_rows}
+    master_by_code: Dict[str, dict] = {}
+    for row in master_rows:
+        code = str(row["emp_code"]).strip()
+        if not code:
+            continue
+        master_by_code[code] = row
+        for alt in _emp_code_candidates(code):
+            master_by_code.setdefault(alt, row)
 
     parsed_rows: List[Dict[str, object]] = []
     for _, row in data.iterrows():
@@ -165,12 +220,15 @@ def parse_muster_roll(
             if not _is_number_like(slno_val):
                 continue
 
-        emp_code = str(row.get(col_emp_code, "")).strip()
+        emp_code = _resolve_emp_code(row.get(col_emp_code, ""), master_by_code)
         if not emp_code or emp_code.lower() == "nan":
             continue
         emp_name_raw = str(row.get(col_emp_name, "")).strip() if col_emp_name else ""
         dept_raw = str(row.get(col_department, "")).strip() if col_department else ""
         if _is_summary_row(emp_code, emp_name_raw, dept_raw, slno_val):
+            continue
+        if emp_code not in master_by_code and not _looks_like_employee_code(emp_code):
+            # Ignore non-employee text rows leaking into employee code column.
             continue
 
         master = master_by_code.get(emp_code, {})

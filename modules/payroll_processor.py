@@ -35,6 +35,7 @@ from utils.helpers import copy_original_muster, get_period_directories, log_audi
 _IFSC_RE = re.compile(r"^[A-Z]{4}0[A-Z0-9]{6}$")
 _DEFAULT_IFSC = "SBIN0000001"
 _DEFAULT_ACCOUNT = "000000000"
+_EMP_CODE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-./]{0,39}$")
 
 
 def _load_adjustments(adjustments_file: str | Path | None) -> tuple[dict, dict]:
@@ -140,6 +141,11 @@ def _normalize_designation(value: object) -> str:
     return "Labour"
 
 
+def _is_valid_emp_code(value: object) -> bool:
+    code = _clean_text(value)
+    return bool(code and _EMP_CODE_RE.match(code) and " " not in code)
+
+
 def _build_auto_employee_payload(record: dict, company_id: int | None) -> dict:
     emp_code = _clean_text(record.get("emp_code"))
     return {
@@ -185,6 +191,8 @@ def _ensure_employee_in_master(
 ) -> dict | None:
     emp_code = _clean_text(record.get("emp_code"))
     if not emp_code:
+        return None
+    if not _is_valid_emp_code(emp_code):
         return None
 
     def _sync_company(employee: dict | None) -> dict | None:
@@ -475,6 +483,8 @@ def finalize_payroll_from_preview(
             allow_auto_employee_creation=allow_auto_employee_creation,
         )
         if not master:
+            if allow_auto_employee_creation and not _is_valid_emp_code(emp_code):
+                continue
             raise ValueError(f"Employee code not found/active in master data: {emp_code}")
         selected_rows.append(
             {
