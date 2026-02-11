@@ -11,6 +11,7 @@ import pandas as pd
 from modules.employee_manager import EmployeeManager, get_manager
 
 _TIME_RE = re.compile(r"^\d{1,2}:\d{2}$")
+_SUMMARY_RE = re.compile(r"(summary|grand\s*total|total|paydays?)", re.IGNORECASE)
 
 
 def _normalize_header(text: object) -> str:
@@ -90,6 +91,22 @@ def _to_float(value: object) -> float:
         return 0.0
 
 
+def _is_number_like(value: object) -> bool:
+    text = str(value).strip()
+    if not text:
+        return False
+    try:
+        float(text)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_summary_row(emp_code: str, emp_name: str, department: str, slno: str) -> bool:
+    blob = " ".join([emp_code, emp_name, department, slno]).strip()
+    return bool(blob and _SUMMARY_RE.search(blob))
+
+
 def parse_muster_roll(
     excel_file: str | Path,
     employee_manager: EmployeeManager | None = None,
@@ -139,13 +156,22 @@ def parse_muster_roll(
         if _is_time_row(row, day_columns):
             continue
 
+        slno_val = str(row.get(col_sl_no, "")).strip() if col_sl_no else ""
+        if slno_val:
+            if _TIME_RE.match(slno_val):
+                continue
+            # Most muster serial rows are numeric; non-numeric serial entries
+            # are typically summary/footer rows and should not be treated as employees.
+            if not _is_number_like(slno_val):
+                continue
+
         emp_code = str(row.get(col_emp_code, "")).strip()
         if not emp_code or emp_code.lower() == "nan":
             continue
-        if col_sl_no:
-            slno_val = str(row.get(col_sl_no, "")).strip()
-            if _TIME_RE.match(slno_val):
-                continue
+        emp_name_raw = str(row.get(col_emp_name, "")).strip() if col_emp_name else ""
+        dept_raw = str(row.get(col_department, "")).strip() if col_department else ""
+        if _is_summary_row(emp_code, emp_name_raw, dept_raw, slno_val):
+            continue
 
         master = master_by_code.get(emp_code, {})
 
@@ -162,7 +188,7 @@ def parse_muster_roll(
         parsed_rows.append(
             {
                 "emp_code": emp_code,
-                "emp_name": str(master.get("emp_name") or row.get(col_emp_name, "")).strip(),
+                "emp_name": str(master.get("emp_name") or emp_name_raw).strip(),
                 "father_husband_name": str(master.get("father_husband_name", "")).strip(),
                 "designation": designation,
                 "grade": str(row.get(col_grade, "")).strip(),
