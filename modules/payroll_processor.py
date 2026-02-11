@@ -9,7 +9,7 @@ from typing import Dict
 
 import pandas as pd
 
-from modules.company_manager import get_company_manager
+from modules.company_manager import CompanyManager
 from modules.employee_manager import EmployeeManager, get_manager
 from modules.excel_generator import (
     generate_advance_register,
@@ -123,10 +123,10 @@ def _company_data_dir(base_data_dir: Path, company_id: int | None) -> Path:
     return base_data_dir / f"company_{int(company_id)}"
 
 
-def _get_company_context(company_id: int | None) -> dict | None:
+def _get_company_context(company_id: int | None, db_path: str | Path | None = None) -> dict | None:
     if company_id is None:
         return None
-    company_manager = get_company_manager()
+    company_manager = CompanyManager(db_path) if db_path is not None else CompanyManager()
     return company_manager.get_company_configuration(int(company_id))
 
 
@@ -198,7 +198,7 @@ def create_payroll_preview(
 ) -> Dict[str, object]:
     """Create editable preview workbook before final payroll generation."""
     manager = employee_manager or get_manager()
-    company_config = _get_company_context(company_id)
+    company_config = _get_company_context(company_id, db_path=manager.db_path)
     period_dirs = get_period_directories(month, year)
     period_data_dir = _company_data_dir(period_dirs["data_period"], company_id)
     if output_dir is None:
@@ -294,7 +294,7 @@ def finalize_payroll_from_preview(
     df = pd.read_excel(preview_path, sheet_name="Editable_Preview")
     df = _normalize_preview_columns(df)
     company_id = _resolve_company_from_preview(df, company_id)
-    company_config = _get_company_context(company_id)
+    company_config = _get_company_context(company_id, db_path=manager.db_path)
 
     period_dirs = get_period_directories(month, year)
     period_data_dir = _company_data_dir(period_dirs["data_period"], company_id)
@@ -412,7 +412,7 @@ def process_monthly_payroll(
 ) -> Dict[str, object]:
     """Process one payroll month directly from muster and generate all documents."""
     manager = employee_manager or get_manager()
-    company_config = _get_company_context(company_id)
+    company_config = _get_company_context(company_id, db_path=manager.db_path)
     period_dirs = get_period_directories(month, year)
     period_data_dir = _company_data_dir(period_dirs["data_period"], company_id)
     if output_dir is None:
