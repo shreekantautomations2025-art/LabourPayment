@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from pathlib import Path
 from typing import Any, Dict
 
 from modules.employee_manager import EmployeeManager
@@ -198,18 +197,23 @@ def build_parser() -> argparse.ArgumentParser:
     ]
 
     add = emp_sub.add_parser("add", help="Add a new employee")
+    mandatory_add_fields = {
+        "--emp-code",
+        "--emp-name",
+        "--father-husband-name",
+        "--dob",
+        "--gender",
+        "--designation",
+        "--doj",
+        "--bank-account-no",
+        "--ifsc-code",
+        "--bank-name",
+    }
     for arg, kwargs in common_fields:
-        add.add_argument(arg, **kwargs)
-    add.add_argument("--emp-code", required=True)
-    add.add_argument("--emp-name", required=True)
-    add.add_argument("--father-husband-name", required=True)
-    add.add_argument("--dob", required=True)
-    add.add_argument("--gender", required=True)
-    add.add_argument("--designation", required=True)
-    add.add_argument("--doj", required=True)
-    add.add_argument("--bank-account-no", required=True)
-    add.add_argument("--ifsc-code", required=True)
-    add.add_argument("--bank-name", required=True)
+        arg_config = dict(kwargs)
+        if arg in mandatory_add_fields:
+            arg_config["required"] = True
+        add.add_argument(arg, **arg_config)
 
     upd = emp_sub.add_parser("update", help="Update employee details")
     upd.add_argument("--emp-code", required=True)
