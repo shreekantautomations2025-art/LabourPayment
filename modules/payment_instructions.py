@@ -11,11 +11,12 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 from config import ESIC_EMPLOYER_CODE, OUTPUT_DIR, PF_ESTABLISHMENT_CODE, PT_REGISTRATION_NO
+from utils.currency_utils import format_indian_number
 from utils.date_utils import month_name, month_short_name, next_month_due_date
 
 
 def _money(v: float) -> str:
-    return f"₹{float(v):,.2f}"
+    return f"Rs. {format_indian_number(float(v))}"
 
 
 def _output_dir(month: int, year: int, output_dir: Path | None = None) -> Path:

@@ -32,12 +32,17 @@ from config import (
     INVOICE_PREFIX_OT,
     OUTPUT_DIR,
 )
+from utils.currency_utils import format_indian_number
 from utils.date_utils import month_name, month_short_name
 from utils.number_to_words import amount_to_words_inr
 
 
 def _money(value: float) -> float:
     return round(float(value), 2)
+
+
+def _money_text(value: float) -> str:
+    return f"Rs. {format_indian_number(value)}"
 
 
 def _cfg(company_config: dict | None, key: str, default):
@@ -193,9 +198,9 @@ def _generate_invoice_pdf(
     gst_amount = _money(subtotal * gst_rate) if gst_applicable else 0.0
     total = _money(subtotal + gst_amount)
     summary = [
-        ["Sub Total", f"₹{subtotal:,.2f}"],
-        [f"GST @ {gst_rate * 100:.0f}%" if gst_applicable else "GST", f"₹{gst_amount:,.2f}"],
-        ["TOTAL", f"₹{total:,.2f}"],
+        ["Sub Total", _money_text(subtotal)],
+        [f"GST @ {gst_rate * 100:.0f}%" if gst_applicable else "GST", _money_text(gst_amount)],
+        ["TOTAL", _money_text(total)],
     ]
     summary_table = Table(summary, colWidths=[110 * mm, 40 * mm], hAlign="RIGHT")
     summary_table.setStyle(
@@ -266,7 +271,7 @@ def generate_md_invoice(
         invoice_no=invoice_no,
         month=month,
         year=year,
-        line_headers=["SR.", "DEPARTMENT", "MAN DAYS", "RATE/DAY", "AMOUNT (₹)"],
+        line_headers=["SR.", "DEPARTMENT", "MAN DAYS", "RATE/DAY", "AMOUNT (Rs.)"],
         line_rows=rows,
         subtotal=_money(subtotal),
         title="MD Invoice",
@@ -305,7 +310,7 @@ def generate_ot_invoice(
         invoice_no=invoice_no,
         month=month,
         year=year,
-        line_headers=["SR.", "DEPARTMENT", "OT HOURS", "RATE/HR", "AMOUNT (₹)"],
+        line_headers=["SR.", "DEPARTMENT", "OT HOURS", "RATE/HR", "AMOUNT (Rs.)"],
         line_rows=rows,
         subtotal=_money(subtotal),
         title="OT Invoice",
