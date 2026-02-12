@@ -7,6 +7,7 @@ from pathlib import Path
 import streamlit as st
 
 from modules.company_manager import CompanyManager
+from ui_components.design_system import create_stat_card, file_upload_zone, page_header, show_alert
 from utils.ui_utils import guess_mime, read_binary_file, save_uploaded_file
 
 
@@ -61,7 +62,7 @@ def _render_add_company_form(manager: CompanyManager) -> None:
             submitted = st.form_submit_button("Create Company", use_container_width=True)
             if submitted:
                 if not company_name.strip() or not contractor_name.strip():
-                    st.error("Company name and contractor name are required.")
+                    show_alert("Company name and contractor name are required.", "error")
                 else:
                     payload = {
                         "company_name": company_name.strip(),
@@ -74,11 +75,11 @@ def _render_add_company_form(manager: CompanyManager) -> None:
                     try:
                         new_id = manager.add_company(payload)
                         st.session_state["active_company_id"] = new_id
-                        st.success(f"Company created successfully. ID: {new_id}")
+                        show_alert(f"Company created successfully. ID: {new_id}", "success")
                         st.balloons()
                         st.rerun()
                     except Exception as exc:  # noqa: BLE001
-                        st.error(f"Failed to create company: {exc}")
+                        show_alert(f"Failed to create company: {exc}", "error")
 
 
 def _render_company_details_tab(manager: CompanyManager, company: dict) -> None:
@@ -131,14 +132,14 @@ def _render_company_details_tab(manager: CompanyManager, company: dict) -> None:
             }
             ok = manager.update_company(int(company["company_id"]), updates)
             if ok:
-                st.success("Company details updated successfully.")
+                show_alert("Company details updated successfully.", "success")
                 st.rerun()
             else:
-                st.error("Failed to update company details.")
+                show_alert("Failed to update company details.", "error")
 
 
 def _render_wage_rates_tab(manager: CompanyManager, company: dict) -> None:
-    st.info("Set company-specific rates. Payroll calculations for this company will use these values.")
+    show_alert("Set company-specific rates. Payroll calculations for this company will use these values.", "info")
     with st.form("wage_rates_form"):
         c1, c2 = st.columns(2)
         with c1:
@@ -183,10 +184,10 @@ def _render_wage_rates_tab(manager: CompanyManager, company: dict) -> None:
                 "supervisor_ot_rate": supervisor_ot,
             }
             if manager.update_company(int(company["company_id"]), updates):
-                st.success("Wage rates updated successfully.")
+                show_alert("Wage rates updated successfully.", "success")
                 st.rerun()
             else:
-                st.error("Failed to update wage rates.")
+                show_alert("Failed to update wage rates.", "error")
 
 
 def _render_statutory_tab(manager: CompanyManager, company: dict) -> None:
@@ -217,10 +218,10 @@ def _render_statutory_tab(manager: CompanyManager, company: dict) -> None:
                     "pf_employer_rate": pf_employer_rate / 100,
                 }
                 if manager.update_company(int(company["company_id"]), updates):
-                    st.success("PF settings updated.")
+                    show_alert("PF settings updated.", "success")
                     st.rerun()
                 else:
-                    st.error("Failed to update PF settings.")
+                    show_alert("Failed to update PF settings.", "error")
 
     with esic_tab:
         with st.form("esic_settings_form"):
@@ -254,10 +255,10 @@ def _render_statutory_tab(manager: CompanyManager, company: dict) -> None:
                     "esic_wage_ceiling": esic_wage_ceiling,
                 }
                 if manager.update_company(int(company["company_id"]), updates):
-                    st.success("ESIC settings updated.")
+                    show_alert("ESIC settings updated.", "success")
                     st.rerun()
                 else:
-                    st.error("Failed to update ESIC settings.")
+                    show_alert("Failed to update ESIC settings.", "error")
 
     with pt_tab:
         with st.form("pt_settings_form"):
@@ -316,10 +317,10 @@ def _render_statutory_tab(manager: CompanyManager, company: dict) -> None:
                     "pt_feb_additional": pt_feb_additional,
                 }
                 if manager.update_company(int(company["company_id"]), updates):
-                    st.success("PT settings updated.")
+                    show_alert("PT settings updated.", "success")
                     st.rerun()
                 else:
-                    st.error("Failed to update PT settings.")
+                    show_alert("Failed to update PT settings.", "error")
 
 
 def _render_invoice_tab(manager: CompanyManager, company: dict) -> None:
@@ -347,10 +348,10 @@ def _render_invoice_tab(manager: CompanyManager, company: dict) -> None:
                 "payment_terms": payment_terms.strip() or "Net 7 Days",
             }
             if manager.update_company(int(company["company_id"]), updates):
-                st.success("Invoice settings updated.")
+                show_alert("Invoice settings updated.", "success")
                 st.rerun()
             else:
-                st.error("Failed to update invoice settings.")
+                show_alert("Failed to update invoice settings.", "error")
 
 
 def _render_import_export_tab(manager: CompanyManager, company: dict | None) -> None:
@@ -358,7 +359,7 @@ def _render_import_export_tab(manager: CompanyManager, company: dict | None) -> 
     with col1:
         st.markdown("**Export Current Company Config**")
         if company is None:
-            st.info("Select a company to export.")
+            show_alert("Select a company to export.", "info")
         elif st.button("Export Company JSON", use_container_width=True):
             export_dir = Path("data") / "ui_temp"
             export_dir.mkdir(parents=True, exist_ok=True)
@@ -374,47 +375,50 @@ def _render_import_export_tab(manager: CompanyManager, company: dict | None) -> 
 
     with col2:
         st.markdown("**Import Company Config**")
-        upload = st.file_uploader("Upload JSON", type=["json"], key="company_config_import")
+        upload = file_upload_zone("Upload JSON config", ["json"], key="company_config_import")
         if upload and st.button("Import Config", use_container_width=True):
             try:
                 path = save_uploaded_file(upload, Path("data") / "ui_temp", prefix="company_import")
                 new_id = manager.import_config(path)
                 st.session_state["active_company_id"] = new_id
-                st.success(f"Company config imported successfully. New company ID: {new_id}")
+                show_alert(f"Company config imported successfully. New company ID: {new_id}", "success")
                 st.rerun()
             except Exception as exc:  # noqa: BLE001
-                st.error(f"Failed to import config: {exc}")
+                show_alert(f"Failed to import config: {exc}", "error")
 
 
 def _render_company_danger_zone(manager: CompanyManager, company: dict) -> None:
     with st.expander("Danger Zone", expanded=False):
-        st.warning("Use carefully. Soft delete deactivates company. Hard delete is blocked if employees are linked.")
+        show_alert("Use carefully. Soft delete deactivates company. Hard delete is blocked if employees are linked.", "warning")
         soft_delete = st.checkbox("Soft delete (recommended)", value=True, key="company_soft_delete")
         confirmation = st.text_input("Type company name to confirm", key="company_delete_confirmation")
         if st.button("Delete Company", type="secondary", use_container_width=True):
             if confirmation.strip() != str(company.get("company_name", "")).strip():
-                st.error("Confirmation text mismatch.")
+                show_alert("Confirmation text mismatch.", "error")
                 return
             try:
                 ok = manager.delete_company(int(company["company_id"]), soft_delete=soft_delete)
                 if ok:
-                    st.success("Company deleted/deactivated successfully.")
+                    show_alert("Company deleted/deactivated successfully.", "success")
                     st.session_state["active_company_id"] = None
                     st.rerun()
                 else:
-                    st.error("Failed to delete/deactivate company.")
+                    show_alert("Failed to delete/deactivate company.", "error")
             except Exception as exc:  # noqa: BLE001
-                st.error(str(exc))
+                show_alert(str(exc), "error")
 
 
 def render_company_settings(manager: CompanyManager, selected_company_id: int | None = None) -> int | None:
     """Render multi-company settings page and return active company_id."""
-    st.subheader("⚙️ Company Settings")
-    st.caption("Manage contractor/client configuration, rates, and statutory settings per company.")
+    page_header(
+        "Company Settings",
+        "Manage contractor/client configuration, wage rates, statutory settings, and imports/exports.",
+        icon="⚙️",
+    )
 
     companies, active_id = _active_company_option(manager, selected_company_id)
     if not companies:
-        st.warning("No companies found. Create a company to proceed.")
+        show_alert("No companies found. Create a company to proceed.", "warning")
         _render_add_company_form(manager)
         return None
 
@@ -426,8 +430,18 @@ def render_company_settings(manager: CompanyManager, selected_company_id: int | 
     selected_id = label_to_id[selected_label]
     company = manager.get_company(selected_id)
     if company is None:
-        st.error("Selected company could not be loaded.")
+        show_alert("Selected company could not be loaded.", "error")
         return None
+
+    summary_cols = st.columns(4)
+    with summary_cols[0]:
+        create_stat_card("Active Company", company.get("company_name", "N/A"), "🏢", "primary")
+    with summary_cols[1]:
+        create_stat_card("Companies", str(len(companies)), "🏬", "info")
+    with summary_cols[2]:
+        create_stat_card("Labour Rate", f"₹{_number(company.get('labour_daily_rate'), 0):.2f}", "👷", "success")
+    with summary_cols[3]:
+        create_stat_card("Supervisor Rate", f"₹{_number(company.get('supervisor_daily_rate'), 0):.2f}", "🧑‍💼", "warning")
 
     tabs = st.tabs(["Company Details", "Wage Rates", "Statutory", "Invoice", "Import/Export"])
     with tabs[0]:
