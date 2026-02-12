@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from modules.employee_manager import EmployeeManager
-from modules.payroll_processor import finalize_payroll_from_preview
+from modules.payroll_processor import create_payroll_preview_from_records, finalize_payroll_from_preview
 
 
 def _create_preview_file(path: Path, emp_code: str) -> Path:
@@ -91,3 +91,28 @@ def test_bulk_upload_accepts_json_and_txt(tmp_path):
     assert txt_result["success"] == 1
     assert manager.get_employee("J001", include_inactive=False) is not None
     assert manager.get_employee("T001", include_inactive=False) is not None
+
+
+def test_create_preview_from_manual_records_without_excel(tmp_path):
+    manager = EmployeeManager(tmp_path / "employees_manual.db")
+    records = [
+        {
+            "emp_code": "M001",
+            "emp_name": "Manual User",
+            "department": "COLD DRAW",
+            "designation": "Labour",
+            "present_days": 20,
+            "ot_hours": 6,
+            "advance": 100,
+            "other_deduction": 0,
+        }
+    ]
+    result = create_payroll_preview_from_records(
+        records=records,
+        month=10,
+        year=2025,
+        employee_manager=manager,
+        allow_auto_employee_creation=True,
+    )
+    assert result["row_count"] == 1
+    assert Path(result["preview_file"]).exists()

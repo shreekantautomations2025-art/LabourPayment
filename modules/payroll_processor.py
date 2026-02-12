@@ -425,6 +425,154 @@ def create_payroll_preview(
     }
 
 
+def create_payroll_preview_from_records(
+    *,
+    records: list[dict],
+    month: int,
+    year: int,
+    employee_manager: EmployeeManager | None = None,
+    company_id: int | None = None,
+    output_dir: Path | None = None,
+    allow_auto_employee_creation: bool = True,
+) -> Dict[str, object]:
+    """Create editable preview directly from manual/csv/json/txt records (no muster excel required)."""
+    manager = employee_manager or get_manager()
+    company_config = _get_company_context(company_id, db_path=manager.db_path)
+    period_dirs = get_period_directories(month, year)
+    period_data_dir = _company_data_dir(period_dirs["data_period"], company_id)
+    if output_dir is None:
+        period_output_dir = _company_output_dir(period_dirs["output_period"], company_id)
+    else:
+        period_output_dir = Path(output_dir)
+    period_data_dir.mkdir(parents=True, exist_ok=True)
+    period_output_dir.mkdir(parents=True, exist_ok=True)
+
+    if not records:
+        raise ValueError("No manual attendance records provided")
+
+    df = pd.DataFrame(records)
+    normalized = {c: str(c).strip().lower().replace(" ", "_") for c in df.columns}
+    df = df.rename(columns=normalized)
+    required = {"emp_code", "present_days", "ot_hours"}
+    missing = required - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required columns for manual preview: {', '.join(sorted(missing))}")
+
+    if "emp_name" not in df.columns:
+        df["emp_name"] = ""
+    if "father_husband_name" not in df.columns:
+        df["father_husband_name"] = ""
+    if "designation" not in df.columns:
+        df["designation"] = "Labour"
+    if "department" not in df.columns:
+        df["department"] = ""
+    if "advance" not in df.columns:
+        df["advance"] = 0.0
+    if "other_deduction" not in df.columns:
+        df["other_deduction"] = 0.0
+
+    df["emp_code"] = df["emp_code"].astype(str).str.strip()
+    df["present_days"] = df["present_days"].apply(lambda x: _safe_float(x, 0.0))
+    df["ot_hours"] = df["ot_hours"].apply(lambda x: _safe_float(x, 0.0))
+    df["advance"] = df["advance"].apply(lambda x: _safe_float(x, 0.0))
+    df["other_deduction"] = df["other_deduction"].apply(lambda x: _safe_float(x, 0.0))
+    df = df[df["emp_code"] != ""].copy()
+    if df.empty:
+        raise ValueError("No valid employee codes found in manual records")
+
+    parsed_df = pd.DataFrame(
+        {
+            "emp_code": df["emp_code"],
+            "emp_name": df["emp_name"].astype(str),
+            "father_husband_name": df["father_husband_name"].astype(str),
+            "designation": df["designation"].astype(str),
+            "grade": df["designation"].astype(str),
+            "department": df["department"].astype(str),
+            "present_days": df["present_days"],
+            "ot_hours": df["ot_hours"],
+            "bank_account_no": "",
+            "ifsc_code": "",
+            "bank_name": "",
+            "uan_no": "",
+            "esic_no": "",
+            "dob": "",
+            "doj": "",
+            "gender": "",
+            "company_id": company_id,
+        }
+    )
+
+    _auto_onboard_missing_employees(
+        manager,
+        parsed_df.to_dict(orient="records"),
+        company_id=company_id,
+        allow_auto_employee_creation=allow_auto_employee_creation,
+    )
+
+    master_codes, master_designations = _get_master_maps(manager, company_id=company_id)
+    is_valid, errors, warnings = validate_muster_roll(parsed_df, master_codes, master_designations)
+    if not is_valid:
+        raise ValueError("Manual input validation failed: " + "; ".join(errors))
+
+    preview_df = parsed_df.copy()
+    preview_df["advance"] = df["advance"].values
+    preview_df["other_deduction"] = df["other_deduction"].values
+    preview_df["approved"] = "Y"
+    preview_df["reviewer_remarks"] = ""
+    preview_df["company_id"] = int(company_id) if company_id is not None else ""
+
+    columns = [
+        "emp_code",
+        "emp_name",
+        "father_husband_name",
+        "department",
+        "designation",
+        "present_days",
+        "ot_hours",
+        "advance",
+        "other_deduction",
+        "approved",
+        "reviewer_remarks",
+        "company_id",
+    ]
+    preview_df = preview_df[columns]
+
+    preview_path = period_output_dir / f"Payroll_Preview_{year}_{month:02d}.xlsx"
+    instruction_df = pd.DataFrame(
+        [
+            {"Instruction": "Manual mode: records entered via UI/CSV/JSON/TXT (no muster excel needed)."},
+            {"Instruction": "Set approved = Y for rows to include in final payroll."},
+            {"Instruction": "Set approved = N to exclude a row from current month payout."},
+            {"Instruction": "Do not change emp_code values."},
+        ]
+    )
+    with pd.ExcelWriter(preview_path, engine="openpyxl") as writer:
+        preview_df.to_excel(writer, sheet_name="Editable_Preview", index=False)
+        instruction_df.to_excel(writer, sheet_name="Instructions", index=False)
+
+    context = {
+        "month": month,
+        "year": year,
+        "source_type": "manual_records",
+        "preview_file": str(preview_path),
+        "row_count": int(len(preview_df)),
+        "company_id": company_id,
+        "company_name": (company_config or {}).get("company_name"),
+    }
+    (period_data_dir / "preview_context.json").write_text(json.dumps(context, indent=2), encoding="utf-8")
+    log_audit("payroll_preview_created_manual_mode", context)
+
+    return {
+        "preview_file": str(preview_path),
+        "archived_muster": "",
+        "validation": {"is_valid": is_valid, "errors": errors, "warnings": warnings},
+        "row_count": int(len(preview_df)),
+        "company_id": company_id,
+        "company_name": (company_config or {}).get("company_name"),
+        "source_type": "manual_records",
+    }
+
+
 def finalize_payroll_from_preview(
     *,
     preview_file: str | Path,

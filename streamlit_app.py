@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from datetime import date, datetime
+import io
 from pathlib import Path
 from typing import Any, Callable
 
@@ -21,8 +22,14 @@ from config import (
 )
 from modules.company_manager import CompanyManager
 from modules.employee_manager import EmployeeManager
-from modules.payroll_processor import create_payroll_preview, finalize_payroll_from_preview, process_monthly_payroll
+from modules.payroll_processor import (
+    create_payroll_preview,
+    create_payroll_preview_from_records,
+    finalize_payroll_from_preview,
+    process_monthly_payroll,
+)
 from ui_components.company_settings import render_company_settings
+from utils.currency_utils import format_inr
 from utils.helpers import ensure_base_directories, setup_logging
 from utils.ui_utils import (
     build_ui_temp_preview_path,
@@ -218,9 +225,9 @@ def _render_processing_summary(result: dict) -> None:
     _render_metric_cards(
         [
             ("Employees", f"{int(result.get('employee_count', 0))}"),
-            ("Gross Salary", f"₹{float(totals.get('gross_salary', 0)):,.2f}"),
-            ("Total Deductions", f"₹{float(totals.get('deductions', 0)):,.2f}"),
-            ("Net Payable", f"₹{float(totals.get('net_payable', 0)):,.2f}"),
+            ("Gross Salary", format_inr(float(totals.get("gross_salary", 0)))),
+            ("Total Deductions", format_inr(float(totals.get("deductions", 0)))),
+            ("Net Payable", format_inr(float(totals.get("net_payable", 0)))),
         ]
     )
 
@@ -245,6 +252,24 @@ def _to_date(value: str) -> date:
         return pd.to_datetime(value).date()
     except Exception:
         return date(1990, 1, 1)
+
+
+def _load_manual_records_file(uploaded_file) -> pd.DataFrame:
+    name = str(getattr(uploaded_file, "name", "")).lower()
+    payload = uploaded_file.getvalue()
+    if name.endswith(".csv"):
+        return pd.read_csv(io.BytesIO(payload))
+    if name.endswith(".json"):
+        return pd.read_json(io.BytesIO(payload))
+    if name.endswith(".txt"):
+        text = payload.decode("utf-8", errors="ignore")
+        first = next((ln for ln in text.splitlines() if ln.strip()), "")
+        if "|" in first and first.count("|") >= 2:
+            return pd.read_csv(io.StringIO(text), sep="|")
+        if "\t" in first and first.count("\t") >= 2:
+            return pd.read_csv(io.StringIO(text), sep="\t")
+        return pd.read_csv(io.StringIO(text), sep=None, engine="python")
+    raise ValueError("Unsupported manual records file. Use csv/json/txt.")
 
 
 def _gender_index(value: str) -> int:
@@ -509,6 +534,70 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
                     st.success("Preview workbook generated successfully.")
                 except Exception as exc:  # noqa: BLE001
                     st.error(f"Preview generation failed: {exc}")
+
+        st.markdown("#### No Excel? Use Manual/CSV/JSON/TXT input")
+        st.caption("Enter attendance manually or upload simple records with columns: emp_code, present_days, ot_hours.")
+        manual_file = st.file_uploader(
+            "Upload manual records (.csv/.json/.txt)",
+            type=["csv", "json", "txt"],
+            key="manual_records_upload",
+        )
+        if "manual_records_df" not in st.session_state:
+            st.session_state["manual_records_df"] = pd.DataFrame(
+                [
+                    {
+                        "emp_code": "",
+                        "emp_name": "",
+                        "department": "",
+                        "designation": "Labour",
+                        "present_days": 0,
+                        "ot_hours": 0,
+                        "advance": 0,
+                        "other_deduction": 0,
+                    }
+                ]
+            )
+
+        if manual_file is not None:
+            try:
+                st.session_state["manual_records_df"] = _load_manual_records_file(manual_file)
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Manual file parse failed: {exc}")
+
+        manual_df = st.data_editor(
+            st.session_state["manual_records_df"],
+            num_rows="dynamic",
+            use_container_width=True,
+            key="manual_records_editor",
+        )
+        st.session_state["manual_records_df"] = manual_df
+
+        if st.button("Create Preview From Manual Records", use_container_width=True):
+            try:
+                records = manual_df.to_dict(orient="records")
+                result = _run_with_animation(
+                    "Creating preview from manual records",
+                    lambda: create_payroll_preview_from_records(
+                        records=records,
+                        month=int(month),
+                        year=int(year),
+                        employee_manager=manager,
+                        company_id=company_id,
+                        allow_auto_employee_creation=not strict_master,
+                    ),
+                    steps=[
+                        "Reading manual records",
+                        "Auto-onboarding missing employees",
+                        "Generating editable preview workbook",
+                    ],
+                )
+                st.session_state["ui_preview_result"] = result
+                st.session_state["ui_preview_month"] = int(month)
+                st.session_state["ui_preview_year"] = int(year)
+                st.session_state["ui_preview_company_id"] = int(company_id)
+                st.success("Preview workbook generated from manual records.")
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Manual preview generation failed: {exc}")
 
         preview_result = st.session_state.get("ui_preview_result")
         if preview_result:

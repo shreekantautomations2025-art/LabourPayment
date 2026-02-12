@@ -126,6 +126,7 @@ The UI provides:
 - Employee CRUD + bulk upload
 - Payroll preview -> approve -> finalize workflow
 - Direct payroll processing option
+- Manual attendance entry mode (no Excel required)
 - Report/document browser with download buttons
 - Company settings module for multi-contractor configuration
 - Payment guidance view and payment instruction PDF download
@@ -181,6 +182,12 @@ To force strict mode (do not auto-create missing employees):
 ```bash
 python main.py process-payroll --muster-file <file> --month 11 --year 2025 --strict-master
 ```
+
+No Excel available? Use Streamlit UI:
+- Payroll Processing -> "No Excel? Use Manual/CSV/JSON/TXT input"
+- Enter rows manually or upload a CSV/JSON/TXT file with:
+  - `emp_code`, `present_days`, `ot_hours`
+  - Optional: `emp_name`, `designation`, `department`, `advance`, `other_deduction`
 
 ### 4) Preview -> Approve -> Finalize Flow (recommended)
 Create editable preview:
