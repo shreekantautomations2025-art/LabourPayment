@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+*.pyd
+
+data/*.db
+data/.secret.key
+data/monthly_data/**/original_muster/*
+data/monthly_data/**/*.json
+data/monthly_data/**/*.csv
+output/**/*.xlsx
+output/**/*.pdf
+output/**/*.csv
+logs/*.log
