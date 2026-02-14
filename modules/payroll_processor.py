@@ -257,18 +257,22 @@ def _ensure_employee_in_master(
             return _sync_company(manager.get_employee(candidate_code, include_inactive=False, company_id=None))
 
     if emp_name:
-        filters = {"company_id": int(company_id)} if company_id is not None else None
-        for candidate in manager.get_all_employees(filters=filters, active_only=False):
-            if _clean_text(candidate.get("emp_name")).lower() != emp_name:
-                continue
-            canonical_emp_code = _clean_text(candidate.get("emp_code"))
-            if not canonical_emp_code:
-                continue
-            if not bool(candidate.get("is_active", False)):
-                _reactivate_employee(manager, canonical_emp_code, company_id)
-                matched = manager.get_employee(canonical_emp_code, include_inactive=False, company_id=company_id)
-                return _sync_company(matched)
-            return _sync_company(candidate)
+        search_scopes = []
+        if company_id is not None:
+            search_scopes.append({"company_id": int(company_id)})
+        search_scopes.append(None)
+        for scope in search_scopes:
+            for candidate in manager.get_all_employees(filters=scope, active_only=False):
+                if _clean_text(candidate.get("emp_name")).lower() != emp_name:
+                    continue
+                canonical_emp_code = _clean_text(candidate.get("emp_code"))
+                if not canonical_emp_code:
+                    continue
+                if not bool(candidate.get("is_active", False)):
+                    _reactivate_employee(manager, canonical_emp_code, company_id if scope is not None else None)
+                    matched = manager.get_employee(canonical_emp_code, include_inactive=False, company_id=None)
+                    return _sync_company(matched)
+                return _sync_company(candidate)
 
     if not allow_auto_employee_creation:
         return None
