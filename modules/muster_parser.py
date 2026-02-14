@@ -269,12 +269,16 @@ def parse_muster_roll(
             master_by_code.setdefault(alt, row)
 
     parsed_rows: List[Dict[str, object]] = []
+    row_sequence = 0
     for _, row in data.iterrows():
         if _is_time_row(row, day_columns):
             continue
 
         slno_val = str(row.get(col_sl_no, "")).strip() if col_sl_no else ""
-        if slno_val:
+        if col_sl_no:
+            if not slno_val:
+                # Employee rows should carry serial numbers when column exists.
+                continue
             if _TIME_RE.match(slno_val):
                 continue
             # Most muster serial rows are numeric; non-numeric serial entries
@@ -312,9 +316,11 @@ def parse_muster_roll(
         ot_hours = _to_float(row.get(col_ot_hrs)) if col_ot_hrs else 0.0
         designation = str(master.get("designation") or row.get(col_grade, "")).strip()
         department = str(master.get("department") or row.get(col_department, "")).strip()
+        row_sequence += 1
 
         parsed_rows.append(
             {
+                "_row_sequence": row_sequence,
                 "emp_code": emp_code,
                 "emp_name": str(master.get("emp_name") or emp_name_raw).strip(),
                 "father_husband_name": str(master.get("father_husband_name", "")).strip(),
@@ -338,5 +344,28 @@ def parse_muster_roll(
     if not parsed_rows:
         raise ValueError("No employee attendance rows detected in muster roll")
 
-    return pd.DataFrame(parsed_rows)
+    # Guardrail: keep one row per employee code to avoid double counting
+    # when source muster accidentally repeats employee blocks/pages.
+    deduped_by_code: Dict[str, Dict[str, object]] = {}
+    order: list[str] = []
+    for row in parsed_rows:
+        key = str(row.get("emp_code", "")).strip().upper()
+        if key not in deduped_by_code:
+            deduped_by_code[key] = dict(row)
+            order.append(key)
+            continue
+
+        existing = deduped_by_code[key]
+        existing["present_days"] = round(max(float(existing.get("present_days", 0) or 0), float(row.get("present_days", 0) or 0)), 2)
+        existing["ot_hours"] = round(max(float(existing.get("ot_hours", 0) or 0), float(row.get("ot_hours", 0) or 0)), 2)
+        for text_field in ("emp_name", "father_husband_name", "designation", "grade", "department"):
+            if not str(existing.get(text_field, "")).strip() and str(row.get(text_field, "")).strip():
+                existing[text_field] = row.get(text_field, "")
+
+    final_rows = [deduped_by_code[key] for key in order]
+    for idx, item in enumerate(final_rows, start=1):
+        item["serial_no"] = idx
+        item.pop("_row_sequence", None)
+
+    return pd.DataFrame(final_rows)
 

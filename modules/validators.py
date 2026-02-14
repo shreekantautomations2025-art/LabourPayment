@@ -68,7 +68,8 @@ def normalize_designation(designation: str) -> str:
 def validate_employee_data(emp_data: dict, existing_codes: Iterable[str] | None = None) -> Tuple[bool, List[str]]:
     """Validate employee data before save."""
     errors: List[str] = []
-    existing_codes = set(existing_codes or [])
+    existing_codes = {str(code).strip() for code in (existing_codes or [])}
+    existing_codes_upper = {code.upper() for code in existing_codes if code}
 
     mandatory_fields = [
         "emp_code",
@@ -89,7 +90,7 @@ def validate_employee_data(emp_data: dict, existing_codes: Iterable[str] | None 
     emp_code = _normalize_text(emp_data.get("emp_code"))
     if emp_code and not EMP_CODE_RE.match(emp_code):
         errors.append("emp_code must be alphanumeric and may include _ or -")
-    if emp_code and emp_code in existing_codes:
+    if emp_code and emp_code.upper() in existing_codes_upper:
         errors.append(f"emp_code '{emp_code}' already exists")
 
     emp_name = _normalize_text(emp_data.get("emp_name"))
@@ -165,7 +166,8 @@ def validate_muster_roll(
         errors.append("Muster data is empty")
         return False, errors, warnings
 
-    duplicate_codes = df[df["emp_code"].astype(str).str.strip().duplicated(keep=False)]["emp_code"].tolist()
+    normalized_codes = df["emp_code"].astype(str).str.strip().str.upper()
+    duplicate_codes = df[normalized_codes.duplicated(keep=False)]["emp_code"].tolist()
     if duplicate_codes:
         errors.append(f"Duplicate employee codes in muster roll: {sorted(set(duplicate_codes))}")
 
