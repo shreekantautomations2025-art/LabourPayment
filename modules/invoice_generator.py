@@ -24,7 +24,6 @@ from config import (
     CONTRACTOR_GSTIN,
     CONTRACTOR_IFSC,
     CONTRACTOR_NAME,
-    GST_APPLICABLE,
     GST_RATE,
     INVOICE_COUNTER_PATH,
     INVOICE_PAYMENT_TERMS,
@@ -49,6 +48,32 @@ def _cfg(company_config: dict | None, key: str, default):
     if company_config is None:
         return default
     return company_config.get(key, default)
+
+
+def _invoice_tax_totals(subtotal: float, company_config: dict | None = None) -> dict[str, float | bool]:
+    """Compute subtotal, GST, and total for invoice summaries.
+
+    GST is enforced for MD and OT invoices as requested by operations.
+    """
+    subtotal_value = _money(subtotal)
+    raw_rate = _cfg(company_config, "gst_rate", GST_RATE)
+    try:
+        gst_rate = float(raw_rate)
+    except (TypeError, ValueError):
+        gst_rate = float(GST_RATE)
+
+    if gst_rate <= 0:
+        gst_rate = float(GST_RATE) if float(GST_RATE) > 0 else 0.18
+
+    gst_amount = _money(subtotal_value * gst_rate)
+    total = _money(subtotal_value + gst_amount)
+    return {
+        "subtotal": subtotal_value,
+        "gst_rate": gst_rate,
+        "gst_amount": gst_amount,
+        "total": total,
+        "gst_applicable": True,
+    }
 
 
 def _output_dir(month: int, year: int, output_dir: Path | None = None) -> Path:
@@ -193,12 +218,13 @@ def _generate_invoice_pdf(
     story.append(line_table)
     story.append(Spacer(1, 10))
 
-    gst_applicable = bool(_cfg(company_config, "gst_applicable", GST_APPLICABLE))
-    gst_rate = float(_cfg(company_config, "gst_rate", GST_RATE))
-    gst_amount = _money(subtotal * gst_rate) if gst_applicable else 0.0
-    total = _money(subtotal + gst_amount)
+    tax_totals = _invoice_tax_totals(subtotal, company_config=company_config)
+    gst_applicable = bool(tax_totals["gst_applicable"])
+    gst_rate = float(tax_totals["gst_rate"])
+    gst_amount = float(tax_totals["gst_amount"])
+    total = float(tax_totals["total"])
     summary = [
-        ["Sub Total", _money_text(subtotal)],
+        ["Sub Total", _money_text(float(tax_totals["subtotal"]))],
         [f"GST @ {gst_rate * 100:.0f}%" if gst_applicable else "GST", _money_text(gst_amount)],
         ["TOTAL", _money_text(total)],
     ]

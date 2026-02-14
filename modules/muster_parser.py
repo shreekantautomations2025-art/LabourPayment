@@ -67,6 +67,34 @@ def _resolve_column(columns: List[str], candidates: Iterable[str]) -> str | None
     return None
 
 
+def _resolve_column_safe(columns: List[str], candidates: Iterable[str]) -> str | None:
+    """Resolve header match while avoiding fuzzy matches for short tokens.
+
+    Tokens like ``P`` and ``OT`` are very short and can accidentally match
+    unrelated columns (for example, ``EmployeeCode`` or ``Total``). This helper
+    keeps short candidates exact-match only, while still allowing partial match
+    for descriptive headers like ``Normal MD`` or ``OT Hrs``.
+    """
+    normalized_map = {_normalize_header(col): col for col in columns}
+    candidate_norms = [_normalize_header(candidate) for candidate in candidates]
+
+    # Exact header match first.
+    for candidate_norm in candidate_norms:
+        hit = normalized_map.get(candidate_norm)
+        if hit:
+            return hit
+
+    # Fuzzy match only for sufficiently descriptive candidates.
+    for col in columns:
+        col_norm = _normalize_header(col)
+        for candidate_norm in candidate_norms:
+            if len(candidate_norm) <= 2:
+                continue
+            if candidate_norm and candidate_norm in col_norm:
+                return col
+    return None
+
+
 def _attendance_value(cell: object) -> float:
     code = str(cell).strip().upper().replace(" ", "")
     if not code:
@@ -90,6 +118,11 @@ def _to_float(value: object) -> float:
         return float(text)
     except ValueError:
         return 0.0
+
+
+def _has_value(value: object) -> bool:
+    text = str(value or "").strip()
+    return bool(text and text.lower() != "nan")
 
 
 def _is_number_like(value: object) -> bool:
@@ -178,9 +211,38 @@ def parse_muster_roll(
     col_emp_name = _resolve_column(columns, ("EmployeeName", "Emp Name", "Name"))
     col_department = _resolve_column(columns, ("Department",))
     col_grade = _resolve_column(columns, ("Grade", "Designation", "NatureofWork", "Nature of Work"))
-    col_p = _resolve_column(columns, ("P", "Present"))
-    col_ot_hrs = _resolve_column(columns, ("OT Hrs", "OTHrs", "OTHours", "OT"))
-    col_payable_days = _resolve_column(columns, ("PayableDays", "Final Days", "FinalDays"))
+    col_normal_md = _resolve_column_safe(
+        columns,
+        (
+            "Normal MD",
+            "Normal M.D.",
+            "NormalMD",
+            "Normal Man Days",
+            "Normal Days",
+            "Man Days",
+            "Mandays",
+            "MD",
+        ),
+    )
+    col_p = _resolve_column_safe(columns, ("P", "Present"))
+    col_ot_hrs = _resolve_column_safe(
+        columns,
+        (
+            "OT Hrs",
+            "OT Hours",
+            "OTHrs",
+            "OTHours",
+            "Normal OT Hrs",
+            "Normal OT Hours",
+            "Overtime Hrs",
+            "Overtime Hours",
+            "OT",
+        ),
+    )
+    col_payable_days = _resolve_column_safe(
+        columns,
+        ("PayableDays", "Payable Days", "Final Days", "FinalDays", "Pay Days", "PayDays"),
+    )
 
     if not col_emp_code:
         raise ValueError("Could not map EmployeeCode column in muster file")
@@ -233,10 +295,18 @@ def parse_muster_roll(
 
         master = master_by_code.get(emp_code, {})
 
-        present_days = _to_float(row.get(col_p)) if col_p else 0.0
-        if present_days <= 0:
+        # Prefer explicit "Normal MD" from uploaded muster if available.
+        present_days = 0.0
+        normal_md_cell = row.get(col_normal_md) if col_normal_md else None
+        used_normal_md = col_normal_md is not None and _has_value(normal_md_cell)
+        if used_normal_md:
+            present_days = _to_float(normal_md_cell)
+        elif col_p:
+            present_days = _to_float(row.get(col_p))
+
+        if present_days <= 0 and not used_normal_md:
             present_days = sum(_attendance_value(row.get(day)) for day in day_columns)
-        if present_days <= 0 and col_payable_days:
+        if present_days <= 0 and not used_normal_md and col_payable_days:
             present_days = _to_float(row.get(col_payable_days))
 
         ot_hours = _to_float(row.get(col_ot_hrs)) if col_ot_hrs else 0.0

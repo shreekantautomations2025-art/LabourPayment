@@ -50,6 +50,32 @@ def _create_muster_with_numeric_emp_code(file_path: Path) -> Path:
     return file_path
 
 
+def _create_muster_with_normal_md(file_path: Path) -> Path:
+    rows = [
+        ["Company", "", "", "", "", "", "", "", "", "", "", ""],
+        ["Period", "Nov 2025", "", "", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", "", "", ""],
+        ["", "", "", "", "", "", "", "", "", "", "", ""],
+        [
+            "Sl.No",
+            "EmployeeCode",
+            "EmployeeName",
+            "Department",
+            "Grade",
+            "1",
+            "2",
+            "P",
+            "Normal MD",
+            "OT Hrs",
+            "OT Amount",
+            "Final Days",
+        ],
+        [1, "E9004", "Normal MD Worker", "COLD DRAW", "Labour", "P", "A", 31, 20, 15, 99999, 31],
+    ]
+    pd.DataFrame(rows).to_excel(file_path, header=False, index=False)
+    return file_path
+
+
 def test_summary_rows_are_skipped(tmp_path):
     manager = EmployeeManager(tmp_path / "employees.db")
     manager.add_employee(
@@ -136,3 +162,35 @@ def test_numeric_emp_code_matches_zero_padded_master_code(tmp_path):
 
     assert len(parsed) == 1
     assert parsed.iloc[0]["emp_code"] == "000281"
+
+
+def test_normal_md_and_ot_hours_are_taken_from_muster_columns(tmp_path):
+    manager = EmployeeManager(tmp_path / "employees_4.db")
+    manager.add_employee(
+        {
+            "emp_code": "E9004",
+            "emp_name": "Normal MD Worker",
+            "father_husband_name": "Parent Four",
+            "dob": "01-01-1993",
+            "gender": "Male",
+            "designation": "Labour",
+            "doj": "01-01-2023",
+            "bank_account_no": "123456789017",
+            "ifsc_code": "SBIN0001234",
+            "bank_name": "State Bank of India",
+            "pan_no": "ABCDE1234J",
+            "aadhaar_no": "123412341238",
+            "uan_no": "123456789017",
+            "esic_no": "ESIC9004",
+            "department": "COLD DRAW",
+        }
+    )
+
+    muster_file = _create_muster_with_normal_md(tmp_path / "muster_with_normal_md.xlsx")
+    parsed = parse_muster_roll(muster_file, employee_manager=manager)
+
+    assert len(parsed) == 1
+    # Should prioritize "Normal MD" over generic "P"/"Final Days".
+    assert float(parsed.iloc[0]["present_days"]) == 20.0
+    # Should use OT hours column, not OT amount.
+    assert float(parsed.iloc[0]["ot_hours"]) == 15.0
