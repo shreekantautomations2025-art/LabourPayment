@@ -183,6 +183,23 @@ class EmployeeManager:
             return None
         return self._decrypt_sensitive(dict(row))
 
+    def get_employee_by_code_flexible(
+        self,
+        emp_code: str,
+        include_inactive: bool = True,
+        company_id: int | None = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Lookup employee by exact or alias code forms (leading zeros / .0)."""
+        canonical = self._resolve_existing_emp_code(emp_code)
+        if not canonical:
+            return None
+        employee = self.get_employee(canonical, include_inactive=include_inactive, company_id=company_id)
+        if employee is not None:
+            return employee
+        if company_id is not None:
+            return self.get_employee(canonical, include_inactive=include_inactive, company_id=None)
+        return None
+
     def add_employee(self, emp_data: Dict[str, Any], raise_on_error: bool = False) -> bool:
         """Add employee to master table."""
         clean = self._sanitize_input(emp_data)

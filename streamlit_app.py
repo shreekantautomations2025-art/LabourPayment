@@ -160,6 +160,26 @@ def _render_processing_summary(result: dict) -> None:
     _render_output_downloads(result.get("output_paths", {}))
 
 
+def _show_processing_exception(exc: Exception, strict_master: bool) -> None:
+    message = str(exc)
+    show_alert(message, "error")
+    if "Missing employee codes in active master data" in message:
+        with st.expander("How to resolve missing/inactive employee codes"):
+            st.markdown(
+                """
+                - Go to **Employee Management → Bulk Upload** and upload latest employee master.
+                - Ensure `emp_code` in master matches muster Excel codes (including leading zeros if used).
+                - Reactivate inactive employees from **Employee Management** if required.
+                - If you want automatic onboarding for missing codes, disable **Strict master validation** and retry.
+                """
+            )
+        if strict_master:
+            show_alert(
+                "Strict mode is ON. Disable it to auto-create missing employees from muster/preview where appropriate.",
+                "info",
+            )
+
+
 def _to_date(value: str) -> date:
     if not value:
         return date(1990, 1, 1)
@@ -397,7 +417,7 @@ def page_employee_management(manager: EmployeeManager, company_id: int | None) -
                 show_alert("Bulk upload processed.", "success")
                 st.json(result)
             except Exception as exc:  # noqa: BLE001
-                show_alert(f"Bulk upload failed: {exc}", "error")
+                _show_processing_exception(exc, strict_master=False)
 
 
 def page_payroll_processing(manager: EmployeeManager, company_id: int | None) -> None:
@@ -468,7 +488,7 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
                     st.session_state["ui_preview_company_id"] = int(company_id)
                     show_alert("Preview workbook generated successfully.", "success")
                 except Exception as exc:  # noqa: BLE001
-                    show_alert(f"Preview generation failed: {exc}", "error")
+                    _show_processing_exception(exc, strict_master=strict_master)
 
         st.markdown("#### No Excel? Use Manual/CSV/JSON/TXT input")
         st.caption("Enter attendance manually or upload simple records with columns: emp_code, present_days, ot_hours.")
@@ -532,7 +552,7 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
                 st.session_state["ui_preview_company_id"] = int(company_id)
                 show_alert("Preview workbook generated from manual records.", "success")
             except Exception as exc:  # noqa: BLE001
-                show_alert(f"Manual preview generation failed: {exc}", "error")
+                _show_processing_exception(exc, strict_master=strict_master)
 
         preview_result = st.session_state.get("ui_preview_result")
         if preview_result:
@@ -600,7 +620,7 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
                         st.balloons()
                         show_alert("Payroll finalized from edited table.", "success")
                     except Exception as exc:  # noqa: BLE001
-                        show_alert(f"Finalize failed: {exc}", "error")
+                        _show_processing_exception(exc, strict_master=strict_master)
 
                 st.markdown("#### Or Upload External Edited Preview File")
                 edited_file_upload = file_upload_zone(
@@ -634,7 +654,7 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
                         st.balloons()
                         show_alert("Payroll finalized from uploaded preview.", "success")
                     except Exception as exc:  # noqa: BLE001
-                        show_alert(f"Finalize from upload failed: {exc}", "error")
+                        _show_processing_exception(exc, strict_master=strict_master)
             else:
                 show_alert("Preview file could not be found on disk. Please regenerate preview.", "warning")
 
@@ -692,7 +712,7 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
                     st.balloons()
                     show_alert("Direct payroll processing completed.", "success")
                 except Exception as exc:  # noqa: BLE001
-                    show_alert(f"Direct payroll processing failed: {exc}", "error")
+                    _show_processing_exception(exc, strict_master=strict_master)
 
     final_result = st.session_state.get("ui_final_result")
     if final_result:

@@ -54,13 +54,17 @@ def _load_adjustments(adjustments_file: str | Path | None) -> tuple[dict, dict]:
 
     advances, others = {}, {}
     for _, row in df.iterrows():
-        code = str(row.get(code_col, "")).strip()
+        code = _normalize_emp_code(row.get(code_col, ""))
         if not code:
             continue
         if adv_col:
-            advances[code] = float(row.get(adv_col, 0) or 0)
+            amount = float(row.get(adv_col, 0) or 0)
+            for alias in _emp_code_candidates(code):
+                advances[alias] = amount
         if other_col:
-            others[code] = float(row.get(other_col, 0) or 0)
+            amount = float(row.get(other_col, 0) or 0)
+            for alias in _emp_code_candidates(code):
+                others[alias] = amount
     return advances, others
 
 
@@ -209,6 +213,23 @@ def _reactivate_employee(manager: EmployeeManager, emp_code: str, company_id: in
                 (datetime.now().isoformat(timespec="seconds"), emp_code, int(company_id)),
             )
         conn.commit()
+
+
+def _find_employee_flexible(
+    manager: EmployeeManager,
+    emp_code: str,
+    company_id: int | None,
+    include_inactive: bool,
+) -> dict | None:
+    for candidate_code in _emp_code_candidates(emp_code):
+        employee = manager.get_employee(candidate_code, include_inactive=include_inactive, company_id=company_id)
+        if employee:
+            return employee
+        if company_id is not None:
+            employee = manager.get_employee(candidate_code, include_inactive=include_inactive, company_id=None)
+            if employee:
+                return employee
+    return None
 
 
 def _ensure_employee_in_master(
@@ -699,6 +720,8 @@ def finalize_payroll_from_preview(
         df["other_deduction"] = 0.0
 
     selected_rows = []
+    missing_codes: list[str] = []
+    inactive_codes: list[str] = []
     for _, row in df.iterrows():
         if require_approved_rows and not _bool_approved(row.get("approved", "")):
             continue
@@ -716,7 +739,12 @@ def finalize_payroll_from_preview(
         if not master:
             if allow_auto_employee_creation and not _is_valid_emp_code(emp_code):
                 continue
-            raise ValueError(f"Employee code not found/active in master data: {emp_code}")
+            any_status = _find_employee_flexible(manager, emp_code, company_id, include_inactive=True)
+            if any_status and not bool(any_status.get("is_active", False)):
+                inactive_codes.append(emp_code)
+            else:
+                missing_codes.append(emp_code)
+            continue
         selected_rows.append(
             {
                 "emp_code": emp_code,
@@ -739,6 +767,16 @@ def finalize_payroll_from_preview(
                 "doj": master.get("doj", ""),
                 "company_id": company_id,
             }
+        )
+
+    if missing_codes or inactive_codes:
+        missing_text = ", ".join(sorted(set(missing_codes))) if missing_codes else "None"
+        inactive_text = ", ".join(sorted(set(inactive_codes))) if inactive_codes else "None"
+        raise ValueError(
+            "Preview validation failed: "
+            f"Missing employee codes in active master data -> {missing_text}; "
+            f"Inactive employee codes -> {inactive_text}. "
+            "Use Employee Management bulk upload/update or disable strict mode to auto-create where appropriate."
         )
 
     if not selected_rows:
