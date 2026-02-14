@@ -116,3 +116,44 @@ def test_create_preview_from_manual_records_without_excel(tmp_path):
     )
     assert result["row_count"] == 1
     assert Path(result["preview_file"]).exists()
+
+
+def test_finalize_resolves_code_mismatch_using_employee_name(tmp_path):
+    manager = EmployeeManager(tmp_path / "employees_name_match.db")
+    manager.add_employee(
+        {
+            "emp_code": "E1009",
+            "emp_name": "Name Match Worker",
+            "father_husband_name": "Parent",
+            "dob": "01-01-1990",
+            "gender": "Male",
+            "designation": "Labour",
+            "doj": "01-01-2020",
+            "bank_account_no": "123456789012",
+            "ifsc_code": "SBIN0001234",
+            "bank_name": "State Bank of India",
+            "pan_no": "ABCDE1234P",
+            "aadhaar_no": "123412341244",
+            "uan_no": "123456789023",
+            "esic_no": "ESIC1010",
+            "department": "COLD DRAW",
+        }
+    )
+
+    preview = _create_preview_file(tmp_path / "preview_name_match.xlsx", "1009")
+    editable = pd.read_excel(preview, sheet_name="Editable_Preview")
+    editable.loc[0, "emp_name"] = "Name Match Worker"
+    with pd.ExcelWriter(preview, engine="openpyxl") as writer:
+        editable.to_excel(writer, sheet_name="Editable_Preview", index=False)
+        pd.DataFrame([{"Instruction": "test"}]).to_excel(writer, sheet_name="Instructions", index=False)
+
+    result = finalize_payroll_from_preview(
+        preview_file=preview,
+        month=9,
+        year=2025,
+        employee_manager=manager,
+        output_dir=tmp_path / "output_name_match",
+        require_approved_rows=True,
+        allow_auto_employee_creation=False,
+    )
+    assert result["employee_count"] == 1

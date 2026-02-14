@@ -141,6 +141,12 @@ def _is_summary_row(emp_code: str, emp_name: str, department: str, slno: str) ->
     return bool(blob and _SUMMARY_RE.search(blob))
 
 
+def _normalize_name_key(value: object) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
 def _emp_code_candidates(value: object) -> list[str]:
     raw = str(value or "").strip()
     if not raw or raw.lower() == "nan":
@@ -159,9 +165,11 @@ def _emp_code_candidates(value: object) -> list[str]:
             candidates.append(number)
         if number.lstrip("0") and number.lstrip("0") not in candidates:
             candidates.append(number.lstrip("0"))
-        # Common employee code width in labour payroll sheets.
-        if number.zfill(6) not in candidates:
-            candidates.append(number.zfill(6))
+        # Common employee code widths in labour payroll sheets.
+        for width in (4, 5, 6, 7, 8):
+            padded = number.zfill(width)
+            if padded not in candidates:
+                candidates.append(padded)
     return candidates
 
 
@@ -209,6 +217,7 @@ def parse_muster_roll(
     excel_file: str | Path,
     employee_manager: EmployeeManager | None = None,
     company_id: int | None = None,
+    allow_unknown_emp_codes: bool = False,
 ) -> pd.DataFrame:
     """Parse uploaded muster roll excel and return employee-wise attendance dataset."""
     file_path = Path(excel_file)
@@ -277,6 +286,7 @@ def parse_muster_roll(
     master_filters = {"company_id": int(company_id)} if company_id is not None else None
     master_rows = manager.get_all_employees(filters=master_filters, active_only=False)
     master_by_code: Dict[str, dict] = {}
+    master_by_name: Dict[str, dict] = {}
     for row in master_rows:
         code = str(row["emp_code"]).strip()
         if not code:
@@ -284,6 +294,10 @@ def parse_muster_roll(
         master_by_code[code] = row
         for alt in _emp_code_candidates(code):
             master_by_code.setdefault(alt, row)
+        name_key = _normalize_name_key(row.get("emp_name"))
+        if name_key:
+            # Keep first mapping to avoid arbitrary reassignment in ambiguous names.
+            master_by_name.setdefault(name_key, row)
 
     parsed_rows: List[Dict[str, object]] = []
     row_sequence = 0
@@ -308,6 +322,10 @@ def parse_muster_roll(
             continue
         emp_name_raw = str(row.get(col_emp_name, "")).strip() if col_emp_name else ""
         dept_raw = str(row.get(col_department, "")).strip() if col_department else ""
+        if emp_code not in master_by_code and emp_name_raw:
+            by_name = master_by_name.get(_normalize_name_key(emp_name_raw))
+            if by_name:
+                emp_code = str(by_name.get("emp_code", "")).strip() or emp_code
         if _is_summary_row(emp_code, emp_name_raw, dept_raw, slno_val):
             continue
         if emp_code not in master_by_code and not _looks_like_employee_code(emp_code):
@@ -317,6 +335,9 @@ def parse_muster_roll(
             continue
         if emp_code not in master_by_code and not emp_name_raw:
             # Unknown employee code without name is almost always noise.
+            continue
+        if master_by_code and emp_code not in master_by_code and not allow_unknown_emp_codes:
+            # For strict processing, skip unknown master codes to prevent inflated rows.
             continue
         if (
             emp_code not in master_by_code

@@ -194,16 +194,18 @@ def _ensure_employee_in_master(
         return None
     if not _is_valid_emp_code(emp_code):
         return None
+    emp_name = _clean_text(record.get("emp_name")).lower()
 
     def _sync_company(employee: dict | None) -> dict | None:
         if employee is None:
             return None
+        canonical_emp_code = _clean_text(employee.get("emp_code")) or emp_code
         if company_id is None:
             return employee
         current_company = employee.get("company_id")
         if current_company is None or int(current_company) != int(company_id):
-            manager.update_employee(emp_code, {"company_id": int(company_id)})
-            return manager.get_employee(emp_code, include_inactive=True)
+            manager.update_employee(canonical_emp_code, {"company_id": int(company_id)})
+            return manager.get_employee(canonical_emp_code, include_inactive=True)
         return employee
 
     active = manager.get_employee(emp_code, include_inactive=False, company_id=company_id)
@@ -224,6 +226,20 @@ def _ensure_employee_in_master(
     if any_company_inactive:
         _reactivate_employee(manager, emp_code, None)
         return _sync_company(manager.get_employee(emp_code, include_inactive=False, company_id=None))
+
+    if emp_name:
+        filters = {"company_id": int(company_id)} if company_id is not None else None
+        for candidate in manager.get_all_employees(filters=filters, active_only=False):
+            if _clean_text(candidate.get("emp_name")).lower() != emp_name:
+                continue
+            canonical_emp_code = _clean_text(candidate.get("emp_code"))
+            if not canonical_emp_code:
+                continue
+            if not bool(candidate.get("is_active", False)):
+                _reactivate_employee(manager, canonical_emp_code, company_id)
+                matched = manager.get_employee(canonical_emp_code, include_inactive=False, company_id=company_id)
+                return _sync_company(matched)
+            return _sync_company(candidate)
 
     if not allow_auto_employee_creation:
         return None
@@ -353,7 +369,12 @@ def create_payroll_preview(
     period_output_dir.mkdir(parents=True, exist_ok=True)
 
     archived_muster = copy_original_muster(Path(muster_file), period_dirs["original_muster"])
-    parsed_df = parse_muster_roll(muster_file, employee_manager=manager, company_id=company_id)
+    parsed_df = parse_muster_roll(
+        muster_file,
+        employee_manager=manager,
+        company_id=company_id,
+        allow_unknown_emp_codes=allow_auto_employee_creation,
+    )
     _auto_onboard_missing_employees(
         manager,
         parsed_df.to_dict(orient="records"),
@@ -646,9 +667,10 @@ def finalize_payroll_from_preview(
             if allow_auto_employee_creation and not _is_valid_emp_code(emp_code):
                 continue
             raise ValueError(f"Employee code not found/active in master data: {emp_code}")
+        canonical_emp_code = _clean_text(master.get("emp_code")) or emp_code
         selected_rows.append(
             {
-                "emp_code": emp_code,
+                "emp_code": canonical_emp_code,
                 "emp_name": _clean_text(row_dict.get("emp_name")) or _clean_text(master.get("emp_name")),
                 "father_husband_name": _clean_text(row_dict.get("father_husband_name"))
                 or _clean_text(master.get("father_husband_name")),
@@ -743,7 +765,12 @@ def process_monthly_payroll(
     period_output_dir.mkdir(parents=True, exist_ok=True)
 
     archived_muster = copy_original_muster(Path(muster_file), period_dirs["original_muster"])
-    parsed_df = parse_muster_roll(muster_file, employee_manager=manager, company_id=company_id)
+    parsed_df = parse_muster_roll(
+        muster_file,
+        employee_manager=manager,
+        company_id=company_id,
+        allow_unknown_emp_codes=allow_auto_employee_creation,
+    )
     _auto_onboard_missing_employees(
         manager,
         parsed_df.to_dict(orient="records"),
