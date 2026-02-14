@@ -72,7 +72,10 @@ def _load_advances_for_period(data_period: Path) -> list[dict]:
 
 
 def _normalize_preview_columns(df: pd.DataFrame) -> pd.DataFrame:
-    renamed = {c: str(c).strip().lower().replace(" ", "_") for c in df.columns}
+    renamed = {
+        c: re.sub(r"_+", "_", str(c).strip().lower().replace(" ", "_").replace(".", "_").replace("/", "_")).strip("_")
+        for c in df.columns
+    }
     return df.rename(columns=renamed)
 
 
@@ -118,6 +121,31 @@ def _clean_text(value: object) -> str:
     return str(value).strip()
 
 
+def _normalize_emp_code(value: object) -> str:
+    text = _clean_text(value).replace(" ", "")
+    if not text:
+        return ""
+    if re.fullmatch(r"\d+\.0+", text):
+        return str(int(float(text)))
+    return text
+
+
+def _emp_code_candidates(value: object) -> list[str]:
+    code = _normalize_emp_code(value)
+    if not code:
+        return []
+    candidates: list[str] = [code]
+    if code.isdigit():
+        number = str(int(code))
+        if number not in candidates:
+            candidates.append(number)
+        for width in (4, 5, 6, 7, 8):
+            padded = number.zfill(width)
+            if padded not in candidates:
+                candidates.append(padded)
+    return candidates
+
+
 def _normalize_bank_account(value: object) -> str:
     digits = "".join(ch for ch in str(value or "") if ch.isdigit())
     if 9 <= len(digits) <= 18:
@@ -142,12 +170,12 @@ def _normalize_designation(value: object) -> str:
 
 
 def _is_valid_emp_code(value: object) -> bool:
-    code = _clean_text(value)
+    code = _normalize_emp_code(value)
     return bool(code and _EMP_CODE_RE.match(code) and " " not in code)
 
 
 def _build_auto_employee_payload(record: dict, company_id: int | None) -> dict:
-    emp_code = _clean_text(record.get("emp_code"))
+    emp_code = _normalize_emp_code(record.get("emp_code"))
     return {
         "emp_code": emp_code,
         "emp_name": _clean_text(record.get("emp_name")) or "Unknown Employee",
@@ -189,7 +217,7 @@ def _ensure_employee_in_master(
     company_id: int | None,
     allow_auto_employee_creation: bool,
 ) -> dict | None:
-    emp_code = _clean_text(record.get("emp_code"))
+    emp_code = _normalize_emp_code(record.get("emp_code"))
     if not emp_code:
         return None
     if not _is_valid_emp_code(emp_code):
@@ -208,24 +236,25 @@ def _ensure_employee_in_master(
             return manager.get_employee(canonical_emp_code, include_inactive=True)
         return employee
 
-    active = manager.get_employee(emp_code, include_inactive=False, company_id=company_id)
-    if active:
-        return _sync_company(active)
+    for candidate_code in _emp_code_candidates(emp_code):
+        active = manager.get_employee(candidate_code, include_inactive=False, company_id=company_id)
+        if active:
+            return _sync_company(active)
 
-    any_status = manager.get_employee(emp_code, include_inactive=True, company_id=company_id)
-    if any_status:
-        _reactivate_employee(manager, emp_code, company_id)
-        return _sync_company(manager.get_employee(emp_code, include_inactive=False, company_id=company_id))
+        any_status = manager.get_employee(candidate_code, include_inactive=True, company_id=company_id)
+        if any_status:
+            _reactivate_employee(manager, candidate_code, company_id)
+            return _sync_company(manager.get_employee(candidate_code, include_inactive=False, company_id=company_id))
 
-    # Cross-company fallback for globally unique employee codes.
-    any_company_active = manager.get_employee(emp_code, include_inactive=False, company_id=None)
-    if any_company_active:
-        return _sync_company(any_company_active)
+        # Cross-company fallback for globally unique employee codes.
+        any_company_active = manager.get_employee(candidate_code, include_inactive=False, company_id=None)
+        if any_company_active:
+            return _sync_company(any_company_active)
 
-    any_company_inactive = manager.get_employee(emp_code, include_inactive=True, company_id=None)
-    if any_company_inactive:
-        _reactivate_employee(manager, emp_code, None)
-        return _sync_company(manager.get_employee(emp_code, include_inactive=False, company_id=None))
+        any_company_inactive = manager.get_employee(candidate_code, include_inactive=True, company_id=None)
+        if any_company_inactive:
+            _reactivate_employee(manager, candidate_code, None)
+            return _sync_company(manager.get_employee(candidate_code, include_inactive=False, company_id=None))
 
     if emp_name:
         filters = {"company_id": int(company_id)} if company_id is not None else None
@@ -259,7 +288,7 @@ def _auto_onboard_missing_employees(
         return
     failures: list[str] = []
     for record in records:
-        emp_code = _clean_text(record.get("emp_code"))
+        emp_code = _normalize_emp_code(record.get("emp_code"))
         if not emp_code:
             continue
         try:
@@ -373,7 +402,7 @@ def create_payroll_preview(
         muster_file,
         employee_manager=manager,
         company_id=company_id,
-        allow_unknown_emp_codes=allow_auto_employee_creation,
+        allow_unknown_emp_codes=False,
     )
     _auto_onboard_missing_employees(
         manager,
@@ -386,12 +415,16 @@ def create_payroll_preview(
     if not is_valid:
         raise ValueError("Muster validation failed: " + "; ".join(errors))
 
+    muster_summary = dict(parsed_df.attrs.get("muster_summary", {}))
     advances_map, other_deductions_map = _load_adjustments(adjustments_file)
     preview_df = parsed_df.copy()
-    if "serial_no" not in preview_df.columns:
-        preview_df.insert(0, "serial_no", range(1, len(preview_df) + 1))
+    if "serial_no" in preview_df.columns:
+        preview_df.insert(0, "Sl.No", range(1, len(preview_df) + 1))
+        preview_df = preview_df.drop(columns=["serial_no"])
+    elif "Sl.No" in preview_df.columns:
+        preview_df["Sl.No"] = range(1, len(preview_df) + 1)
     else:
-        preview_df["serial_no"] = range(1, len(preview_df) + 1)
+        preview_df.insert(0, "Sl.No", range(1, len(preview_df) + 1))
     preview_df["advance"] = preview_df["emp_code"].map(advances_map).fillna(0.0)
     preview_df["other_deduction"] = preview_df["emp_code"].map(other_deductions_map).fillna(0.0)
     preview_df["approved"] = "Y"
@@ -399,7 +432,7 @@ def create_payroll_preview(
     preview_df["company_id"] = int(company_id) if company_id is not None else ""
 
     columns = [
-        "serial_no",
+        "Sl.No",
         "emp_code",
         "emp_name",
         "father_husband_name",
@@ -422,7 +455,7 @@ def create_payroll_preview(
             {"Instruction": "Set approved = Y for rows to include in final payroll."},
             {"Instruction": "Set approved = N to exclude a row from current month payout."},
             {"Instruction": "Do not change emp_code values."},
-            {"Instruction": "serial_no is auto-normalized to sequential order."},
+            {"Instruction": "Sl.No is auto-normalized to sequential order (1..N)."},
         ]
     )
     with pd.ExcelWriter(preview_path, engine="openpyxl") as writer:
@@ -436,6 +469,7 @@ def create_payroll_preview(
         "archived_muster": str(archived_muster),
         "preview_file": str(preview_path),
         "row_count": int(len(preview_df)),
+        "muster_summary": muster_summary,
         "company_id": company_id,
         "company_name": (company_config or {}).get("company_name"),
     }
@@ -447,6 +481,7 @@ def create_payroll_preview(
         "archived_muster": str(archived_muster),
         "validation": {"is_valid": is_valid, "errors": errors, "warnings": warnings},
         "row_count": int(len(preview_df)),
+        "muster_summary": muster_summary,
         "company_id": company_id,
         "company_name": (company_config or {}).get("company_name"),
     }
@@ -498,7 +533,7 @@ def create_payroll_preview_from_records(
     if "other_deduction" not in df.columns:
         df["other_deduction"] = 0.0
 
-    df["emp_code"] = df["emp_code"].astype(str).str.strip()
+    df["emp_code"] = df["emp_code"].apply(_normalize_emp_code)
     df["present_days"] = df["present_days"].apply(lambda x: _safe_float(x, 0.0))
     df["ot_hours"] = df["ot_hours"].apply(lambda x: _safe_float(x, 0.0))
     df["advance"] = df["advance"].apply(lambda x: _safe_float(x, 0.0))
@@ -542,10 +577,13 @@ def create_payroll_preview_from_records(
         raise ValueError("Manual input validation failed: " + "; ".join(errors))
 
     preview_df = parsed_df.copy()
-    if "serial_no" not in preview_df.columns:
-        preview_df.insert(0, "serial_no", range(1, len(preview_df) + 1))
+    if "serial_no" in preview_df.columns:
+        preview_df.insert(0, "Sl.No", range(1, len(preview_df) + 1))
+        preview_df = preview_df.drop(columns=["serial_no"])
+    elif "Sl.No" in preview_df.columns:
+        preview_df["Sl.No"] = range(1, len(preview_df) + 1)
     else:
-        preview_df["serial_no"] = range(1, len(preview_df) + 1)
+        preview_df.insert(0, "Sl.No", range(1, len(preview_df) + 1))
     preview_df["advance"] = df["advance"].values
     preview_df["other_deduction"] = df["other_deduction"].values
     preview_df["approved"] = "Y"
@@ -553,7 +591,7 @@ def create_payroll_preview_from_records(
     preview_df["company_id"] = int(company_id) if company_id is not None else ""
 
     columns = [
-        "serial_no",
+        "Sl.No",
         "emp_code",
         "emp_name",
         "father_husband_name",
@@ -576,7 +614,7 @@ def create_payroll_preview_from_records(
             {"Instruction": "Set approved = Y for rows to include in final payroll."},
             {"Instruction": "Set approved = N to exclude a row from current month payout."},
             {"Instruction": "Do not change emp_code values."},
-            {"Instruction": "serial_no is auto-normalized to sequential order."},
+            {"Instruction": "Sl.No is auto-normalized to sequential order (1..N)."},
         ]
     )
     with pd.ExcelWriter(preview_path, engine="openpyxl") as writer:
@@ -653,10 +691,11 @@ def finalize_payroll_from_preview(
     for _, row in df.iterrows():
         if require_approved_rows and not _bool_approved(row.get("approved", "")):
             continue
-        emp_code = str(row.get("emp_code", "")).strip()
+        emp_code = _normalize_emp_code(row.get("emp_code", ""))
         if not emp_code:
             continue
         row_dict = row.to_dict()
+        row_dict["emp_code"] = emp_code
         master = _ensure_employee_in_master(
             manager,
             row_dict,
@@ -769,7 +808,7 @@ def process_monthly_payroll(
         muster_file,
         employee_manager=manager,
         company_id=company_id,
-        allow_unknown_emp_codes=allow_auto_employee_creation,
+        allow_unknown_emp_codes=False,
     )
     _auto_onboard_missing_employees(
         manager,
@@ -807,6 +846,7 @@ def process_monthly_payroll(
         "archived_muster": str(archived_muster),
         "validation": {"is_valid": is_valid, "errors": errors, "warnings": warnings},
         "employee_count": len(wages),
+        "muster_summary": dict(parsed_df.attrs.get("muster_summary", {})),
         "totals": _calculate_totals(wages),
         "output_paths": output_paths,
         "company_id": company_id,

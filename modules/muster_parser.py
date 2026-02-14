@@ -147,6 +147,18 @@ def _normalize_name_key(value: object) -> str:
     return text
 
 
+def _to_int_or_none(value: object) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _emp_code_candidates(value: object) -> list[str]:
     raw = str(value or "").strip()
     if not raw or raw.lower() == "nan":
@@ -284,7 +296,7 @@ def parse_muster_roll(
 
     manager = employee_manager or get_manager()
     master_filters = {"company_id": int(company_id)} if company_id is not None else None
-    master_rows = manager.get_all_employees(filters=master_filters, active_only=False)
+    master_rows = manager.get_all_employees(filters=master_filters, active_only=True)
     master_by_code: Dict[str, dict] = {}
     master_by_name: Dict[str, dict] = {}
     for row in master_rows:
@@ -306,6 +318,7 @@ def parse_muster_roll(
             continue
 
         slno_val = str(row.get(col_sl_no, "")).strip() if col_sl_no else ""
+        source_sl_no = _to_int_or_none(slno_val)
         if col_sl_no:
             if not slno_val:
                 # Employee rows should carry serial numbers when column exists.
@@ -373,6 +386,7 @@ def parse_muster_roll(
         parsed_rows.append(
             {
                 "_row_sequence": row_sequence,
+                "_source_sl_no": source_sl_no,
                 "emp_code": emp_code,
                 "emp_name": str(master.get("emp_name") or emp_name_raw).strip(),
                 "father_husband_name": str(master.get("father_husband_name", "")).strip(),
@@ -410,6 +424,12 @@ def parse_muster_roll(
         existing = deduped_by_code[key]
         existing["present_days"] = round(max(float(existing.get("present_days", 0) or 0), float(row.get("present_days", 0) or 0)), 2)
         existing["ot_hours"] = round(max(float(existing.get("ot_hours", 0) or 0), float(row.get("ot_hours", 0) or 0)), 2)
+        existing_sl = _to_int_or_none(existing.get("_source_sl_no"))
+        new_sl = _to_int_or_none(row.get("_source_sl_no"))
+        if existing_sl is None and new_sl is not None:
+            existing["_source_sl_no"] = new_sl
+        elif existing_sl is not None and new_sl is not None and new_sl < existing_sl:
+            existing["_source_sl_no"] = new_sl
         for text_field in ("emp_name", "father_husband_name", "designation", "grade", "department"):
             if not str(existing.get(text_field, "")).strip() and str(row.get(text_field, "")).strip():
                 existing[text_field] = row.get(text_field, "")
@@ -419,5 +439,25 @@ def parse_muster_roll(
         item["serial_no"] = idx
         item.pop("_row_sequence", None)
 
-    return pd.DataFrame(final_rows)
+    result = pd.DataFrame(final_rows)
+    source_serials = sorted(
+        {
+            int(sl)
+            for sl in result.get("_source_sl_no", pd.Series(dtype="float64")).dropna().tolist()
+            if _to_int_or_none(sl) is not None
+        }
+    )
+    sl_range = (source_serials[-1] - source_serials[0] + 1) if source_serials else len(result)
+    sl_gaps = max(sl_range - len(source_serials), 0) if source_serials else 0
+    result.attrs["muster_summary"] = {
+        "employee_count": int(len(result)),
+        "source_slno_count": int(len(source_serials)),
+        "source_slno_min": int(source_serials[0]) if source_serials else None,
+        "source_slno_max": int(source_serials[-1]) if source_serials else None,
+        "source_slno_range": int(sl_range),
+        "slno_gaps_detected": int(sl_gaps),
+    }
+    if "_source_sl_no" in result.columns:
+        result = result.drop(columns=["_source_sl_no"])
+    return result
 

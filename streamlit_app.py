@@ -538,6 +538,15 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
         if preview_result:
             st.markdown("#### Preview Result")
             show_alert("Review preview rows and approve before finalization.", "info")
+            muster_summary = preview_result.get("muster_summary", {}) if isinstance(preview_result, dict) else {}
+            if muster_summary:
+                summary_cols = st.columns(3)
+                with summary_cols[0]:
+                    create_stat_card("Employees Found", str(muster_summary.get("employee_count", 0)), "👥", "primary")
+                with summary_cols[1]:
+                    create_stat_card("Source Sl.No Range", str(muster_summary.get("source_slno_range", 0)), "🔢", "info")
+                with summary_cols[2]:
+                    create_stat_card("Sl.No Gaps Handled", str(muster_summary.get("slno_gaps_detected", 0)), "🛠️", "warning")
             st.json(preview_result)
             preview_path = Path(preview_result["preview_file"])
             if preview_path.exists():

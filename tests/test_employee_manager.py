@@ -113,3 +113,36 @@ def test_bulk_upload_skips_duplicate_codes_and_normalizes_serial(tmp_path):
     assert manager.get_employee("B001", include_inactive=False) is not None
     assert manager.get_employee("B002", include_inactive=False) is not None
 
+
+def test_bulk_upload_numeric_code_updates_zero_padded_existing(tmp_path):
+    manager = EmployeeManager(tmp_path / "employees_alias.db")
+    payload = _employee_payload("001009")
+    payload["emp_name"] = "Legacy Worker"
+    assert manager.add_employee(payload) is True
+
+    upload = pd.DataFrame(
+        [
+            {
+                "Sl.No": 1,
+                "Emp Code": "1009",
+                "Employee Name": "Legacy Worker Updated",
+                "Father/Husband Name": "Suresh Patil",
+                "DOB": "01-01-1995",
+                "Gender": "Male",
+                "Designation": "Labour",
+                "DOJ": "01-01-2020",
+                "Bank Account No": "123456789012",
+                "IFSC Code": "SBIN0001234",
+                "Bank Name": "State Bank of India",
+            }
+        ]
+    )
+    path = Path(tmp_path) / "bulk_alias.xlsx"
+    upload.to_excel(path, index=False)
+
+    result = manager.bulk_upload_employees(path)
+    assert result["success"] == 1
+    rows = manager.get_all_employees(active_only=False)
+    assert len(rows) == 1
+    assert manager.get_employee("001009", include_inactive=False)["emp_name"] == "Legacy Worker Updated"
+

@@ -72,9 +72,32 @@ class EmployeeManager:
             conn.commit()
 
     @staticmethod
+    def _normalize_emp_code(value: object) -> str:
+        code = str(value or "").strip()
+        if not code:
+            return ""
+        compact = code.replace(" ", "")
+        if re.fullmatch(r"\d+\.0+", compact):
+            return str(int(float(compact)))
+        return compact
+
+    @staticmethod
+    def _emp_code_aliases(emp_code: str) -> set[str]:
+        code = EmployeeManager._normalize_emp_code(emp_code)
+        if not code:
+            return set()
+        aliases = {code, code.upper()}
+        if code.isdigit():
+            number = str(int(code))
+            aliases.update({number, number.upper()})
+            for width in (4, 5, 6, 7, 8):
+                aliases.add(number.zfill(width))
+        return aliases
+
+    @staticmethod
     def _sanitize_input(emp_data: Dict[str, Any]) -> Dict[str, Any]:
         clean = dict(emp_data)
-        clean["emp_code"] = str(clean.get("emp_code", "")).strip()
+        clean["emp_code"] = EmployeeManager._normalize_emp_code(clean.get("emp_code", ""))
         clean["emp_name"] = str(clean.get("emp_name", "")).strip()
         clean["father_husband_name"] = str(clean.get("father_husband_name", "")).strip()
         clean["dob"] = parse_flexible_date(clean.get("dob"))
@@ -118,7 +141,7 @@ class EmployeeManager:
 
     def _resolve_existing_emp_code(self, emp_code: str) -> str | None:
         """Return existing canonical employee code using case-insensitive match."""
-        code = str(emp_code or "").strip()
+        code = self._normalize_emp_code(emp_code)
         if not code:
             return None
         with self._connect() as conn:
@@ -126,7 +149,16 @@ class EmployeeManager:
                 "SELECT emp_code FROM employees WHERE UPPER(emp_code) = UPPER(?) LIMIT 1",
                 (code,),
             ).fetchone()
-        return str(row["emp_code"]).strip() if row else None
+            if row:
+                return str(row["emp_code"]).strip()
+
+            aliases = self._emp_code_aliases(code)
+            rows = conn.execute("SELECT emp_code FROM employees").fetchall()
+            for item in rows:
+                candidate = str(item["emp_code"]).strip()
+                if self._normalize_emp_code(candidate) in aliases or candidate in aliases:
+                    return candidate
+        return None
 
     def get_employee_codes(self, active_only: bool = False) -> List[str]:
         query = "SELECT emp_code FROM employees"
@@ -154,6 +186,13 @@ class EmployeeManager:
     def add_employee(self, emp_data: Dict[str, Any], raise_on_error: bool = False) -> bool:
         """Add employee to master table."""
         clean = self._sanitize_input(emp_data)
+        existing_code_alias = self._resolve_existing_emp_code(clean.get("emp_code", ""))
+        if existing_code_alias and str(existing_code_alias).strip().upper() != str(clean.get("emp_code", "")).strip().upper():
+            if raise_on_error:
+                raise ValueError(
+                    f"emp_code '{clean.get('emp_code')}' maps to existing employee code '{existing_code_alias}'."
+                )
+            return False
         if clean.get("company_id") is None:
             clean["company_id"] = CompanyManager(self.db_path).get_default_company_id()
         valid, errors = validate_employee_data(clean, existing_codes=self.get_employee_codes(active_only=False))
