@@ -413,7 +413,7 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
         return
     strict_master = st.checkbox(
         "Strict master validation (disable auto-create missing employees)",
-        value=False,
+        value=True,
         help="When unchecked, payroll auto-creates missing employees from muster/preview data.",
     )
     if strict_master:

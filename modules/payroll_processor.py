@@ -367,6 +367,10 @@ def create_payroll_preview(
 
     advances_map, other_deductions_map = _load_adjustments(adjustments_file)
     preview_df = parsed_df.copy()
+    if "serial_no" not in preview_df.columns:
+        preview_df.insert(0, "serial_no", range(1, len(preview_df) + 1))
+    else:
+        preview_df["serial_no"] = range(1, len(preview_df) + 1)
     preview_df["advance"] = preview_df["emp_code"].map(advances_map).fillna(0.0)
     preview_df["other_deduction"] = preview_df["emp_code"].map(other_deductions_map).fillna(0.0)
     preview_df["approved"] = "Y"
@@ -374,6 +378,7 @@ def create_payroll_preview(
     preview_df["company_id"] = int(company_id) if company_id is not None else ""
 
     columns = [
+        "serial_no",
         "emp_code",
         "emp_name",
         "father_husband_name",
@@ -396,6 +401,7 @@ def create_payroll_preview(
             {"Instruction": "Set approved = Y for rows to include in final payroll."},
             {"Instruction": "Set approved = N to exclude a row from current month payout."},
             {"Instruction": "Do not change emp_code values."},
+            {"Instruction": "serial_no is auto-normalized to sequential order."},
         ]
     )
     with pd.ExcelWriter(preview_path, engine="openpyxl") as writer:
@@ -515,6 +521,10 @@ def create_payroll_preview_from_records(
         raise ValueError("Manual input validation failed: " + "; ".join(errors))
 
     preview_df = parsed_df.copy()
+    if "serial_no" not in preview_df.columns:
+        preview_df.insert(0, "serial_no", range(1, len(preview_df) + 1))
+    else:
+        preview_df["serial_no"] = range(1, len(preview_df) + 1)
     preview_df["advance"] = df["advance"].values
     preview_df["other_deduction"] = df["other_deduction"].values
     preview_df["approved"] = "Y"
@@ -522,6 +532,7 @@ def create_payroll_preview_from_records(
     preview_df["company_id"] = int(company_id) if company_id is not None else ""
 
     columns = [
+        "serial_no",
         "emp_code",
         "emp_name",
         "father_husband_name",
@@ -544,6 +555,7 @@ def create_payroll_preview_from_records(
             {"Instruction": "Set approved = Y for rows to include in final payroll."},
             {"Instruction": "Set approved = N to exclude a row from current month payout."},
             {"Instruction": "Do not change emp_code values."},
+            {"Instruction": "serial_no is auto-normalized to sequential order."},
         ]
     )
     with pd.ExcelWriter(preview_path, engine="openpyxl") as writer:

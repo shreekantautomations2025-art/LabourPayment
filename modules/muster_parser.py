@@ -188,6 +188,23 @@ def _looks_like_employee_code(emp_code: str) -> bool:
     return True
 
 
+def _is_suspicious_unknown_code(emp_code: str, slno_val: str) -> bool:
+    """Heuristic guard for non-employee numeric tokens leaking as emp codes."""
+    code = str(emp_code or "").strip()
+    if not code:
+        return True
+    digits_only = code.isdigit()
+    if digits_only and len(code.lstrip("0") or "0") <= 3:
+        return True
+    if digits_only and slno_val and _is_number_like(slno_val):
+        try:
+            if int(float(code)) == int(float(slno_val)):
+                return True
+        except Exception:  # noqa: BLE001
+            return False
+    return False
+
+
 def parse_muster_roll(
     excel_file: str | Path,
     employee_manager: EmployeeManager | None = None,
@@ -295,6 +312,11 @@ def parse_muster_roll(
             continue
         if emp_code not in master_by_code and not _looks_like_employee_code(emp_code):
             # Ignore non-employee text rows leaking into employee code column.
+            continue
+        if emp_code not in master_by_code and _is_suspicious_unknown_code(emp_code, slno_val):
+            continue
+        if emp_code not in master_by_code and not emp_name_raw:
+            # Unknown employee code without name is almost always noise.
             continue
         if (
             emp_code not in master_by_code
