@@ -166,7 +166,15 @@ def validate_muster_roll(
         errors.append("Muster data is empty")
         return False, errors, warnings
 
-    normalized_codes = df["emp_code"].astype(str).str.strip().str.upper()
+    def _normalize_emp_code_for_compare(value: object) -> str:
+        text = str(value or "").strip().upper()
+        if re.fullmatch(r"\d+\.0+", text):
+            return str(int(float(text)))
+        if text.isdigit():
+            return str(int(text))
+        return text
+
+    normalized_codes = df["emp_code"].apply(_normalize_emp_code_for_compare)
     duplicate_codes = df[normalized_codes.duplicated(keep=False)]["emp_code"].tolist()
     if duplicate_codes:
         errors.append(f"Duplicate employee codes in muster roll: {sorted(set(duplicate_codes))}")

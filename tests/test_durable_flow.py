@@ -122,7 +122,7 @@ def test_finalize_resolves_code_mismatch_using_employee_name(tmp_path):
     manager = EmployeeManager(tmp_path / "employees_name_match.db")
     manager.add_employee(
         {
-            "emp_code": "E1009",
+            "emp_code": "001009",
             "emp_name": "Name Match Worker",
             "father_husband_name": "Parent",
             "dob": "01-01-1990",

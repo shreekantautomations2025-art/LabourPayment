@@ -335,8 +335,15 @@ def _resolve_company_from_preview(df: pd.DataFrame, company_id: int | None) -> i
 def _get_master_maps(manager: EmployeeManager, company_id: int | None = None) -> tuple[set[str], dict]:
     filters = {"company_id": int(company_id)} if company_id is not None else None
     master_rows = manager.get_all_employees(active_only=True, filters=filters)
-    codes = {r["emp_code"] for r in master_rows}
-    designations = {r["emp_code"]: r["designation"] for r in master_rows}
+    codes: set[str] = set()
+    designations: dict[str, str] = {}
+    for row in master_rows:
+        code = _clean_text(row.get("emp_code"))
+        designation = _clean_text(row.get("designation"))
+        for alias in _emp_code_candidates(code):
+            codes.add(alias)
+            if alias not in designations:
+                designations[alias] = designation
     return codes, designations
 
 
@@ -706,10 +713,9 @@ def finalize_payroll_from_preview(
             if allow_auto_employee_creation and not _is_valid_emp_code(emp_code):
                 continue
             raise ValueError(f"Employee code not found/active in master data: {emp_code}")
-        canonical_emp_code = _clean_text(master.get("emp_code")) or emp_code
         selected_rows.append(
             {
-                "emp_code": canonical_emp_code,
+                "emp_code": emp_code,
                 "emp_name": _clean_text(row_dict.get("emp_name")) or _clean_text(master.get("emp_name")),
                 "father_husband_name": _clean_text(row_dict.get("father_husband_name"))
                 or _clean_text(master.get("father_husband_name")),

@@ -352,7 +352,7 @@ def test_short_numeric_unknown_emp_code_is_skipped(tmp_path):
     assert parsed.iloc[0]["emp_code"] == "E9007"
 
 
-def test_name_match_recovers_master_emp_code(tmp_path):
+def test_name_match_keeps_excel_emp_code(tmp_path):
     manager = EmployeeManager(tmp_path / "employees_8.db")
     manager.add_employee(
         {
@@ -378,7 +378,7 @@ def test_name_match_recovers_master_emp_code(tmp_path):
     parsed = parse_muster_roll(muster_file, employee_manager=manager)
 
     assert len(parsed) == 1
-    assert parsed.iloc[0]["emp_code"] == "E9008"
+    assert parsed.iloc[0]["emp_code"] == "1009"
 
 
 def test_unknown_long_code_skipped_in_strict_mode(tmp_path):

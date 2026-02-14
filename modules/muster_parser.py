@@ -164,8 +164,15 @@ def _emp_code_candidates(value: object) -> list[str]:
     if not raw or raw.lower() == "nan":
         return []
 
-    candidates: list[str] = [raw]
     compact = raw.replace(" ", "")
+    if re.fullmatch(r"\d+\.0+", compact):
+        primary = str(int(float(compact)))
+    else:
+        primary = compact
+
+    candidates: list[str] = [primary]
+    if raw not in candidates:
+        candidates.append(raw)
     if compact not in candidates:
         candidates.append(compact)
 
@@ -189,10 +196,6 @@ def _resolve_emp_code(value: object, master_by_code: dict[str, dict]) -> str:
     candidates = _emp_code_candidates(value)
     if not candidates:
         return ""
-    for candidate in candidates:
-        if candidate in master_by_code:
-            canonical = str(master_by_code[candidate].get("emp_code", "")).strip()
-            return canonical or candidate
     return candidates[0]
 
 
@@ -214,7 +217,7 @@ def _is_suspicious_unknown_code(emp_code: str, slno_val: str) -> bool:
     if not code:
         return True
     digits_only = code.isdigit()
-    if digits_only and len(code.lstrip("0") or "0") <= 3:
+    if digits_only and len(code) <= 3:
         return True
     if digits_only and slno_val and _is_number_like(slno_val):
         try:
@@ -335,25 +338,26 @@ def parse_muster_roll(
             continue
         emp_name_raw = str(row.get(col_emp_name, "")).strip() if col_emp_name else ""
         dept_raw = str(row.get(col_department, "")).strip() if col_department else ""
-        if emp_code not in master_by_code and emp_name_raw:
+        matched_master = master_by_code.get(emp_code)
+        if matched_master is None and emp_name_raw:
             by_name = master_by_name.get(_normalize_name_key(emp_name_raw))
             if by_name:
-                emp_code = str(by_name.get("emp_code", "")).strip() or emp_code
+                matched_master = by_name
         if _is_summary_row(emp_code, emp_name_raw, dept_raw, slno_val):
             continue
-        if emp_code not in master_by_code and not _looks_like_employee_code(emp_code):
+        if matched_master is None and not _looks_like_employee_code(emp_code):
             # Ignore non-employee text rows leaking into employee code column.
             continue
-        if emp_code not in master_by_code and _is_suspicious_unknown_code(emp_code, slno_val):
+        if matched_master is None and _is_suspicious_unknown_code(emp_code, slno_val):
             continue
-        if emp_code not in master_by_code and not emp_name_raw:
+        if matched_master is None and not emp_name_raw:
             # Unknown employee code without name is almost always noise.
             continue
-        if master_by_code and emp_code not in master_by_code and not allow_unknown_emp_codes:
+        if master_by_code and matched_master is None and not allow_unknown_emp_codes:
             # For strict processing, skip unknown master codes to prevent inflated rows.
             continue
         if (
-            emp_code not in master_by_code
+            matched_master is None
             and col_sl_no
             and _is_number_like(slno_val)
             and _is_number_like(emp_code)
@@ -362,7 +366,7 @@ def parse_muster_roll(
             # Guardrail: avoid interpreting serial numbers as employee codes.
             continue
 
-        master = master_by_code.get(emp_code, {})
+        master = matched_master or {}
 
         # Prefer explicit "Normal MD" from uploaded muster if available.
         present_days = 0.0
