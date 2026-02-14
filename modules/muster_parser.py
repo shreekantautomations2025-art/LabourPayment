@@ -296,6 +296,15 @@ def parse_muster_roll(
         if emp_code not in master_by_code and not _looks_like_employee_code(emp_code):
             # Ignore non-employee text rows leaking into employee code column.
             continue
+        if (
+            emp_code not in master_by_code
+            and col_sl_no
+            and _is_number_like(slno_val)
+            and _is_number_like(emp_code)
+            and int(float(slno_val)) == int(float(emp_code))
+        ):
+            # Guardrail: avoid interpreting serial numbers as employee codes.
+            continue
 
         master = master_by_code.get(emp_code, {})
 
