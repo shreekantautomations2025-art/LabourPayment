@@ -29,6 +29,16 @@ from modules.payroll_processor import (
     process_monthly_payroll,
 )
 from ui_components.company_settings import render_company_settings
+from ui_components.design_system import (
+    create_stat_card,
+    file_upload_zone,
+    load_custom_css,
+    page_header,
+    show_alert,
+    show_loading,
+    show_progress,
+    toggle_dark_mode,
+)
 from utils.currency_utils import format_inr
 from utils.helpers import ensure_base_directories, setup_logging
 from utils.ui_utils import (
@@ -57,147 +67,52 @@ def _bootstrap_company_manager() -> CompanyManager:
 
 
 def _inject_custom_css() -> None:
-    st.markdown(
-        """
-        <style>
-        :root {
-            --brand-1: #5d7cf9;
-            --brand-2: #7d5bff;
-            --brand-3: #21c7ff;
-            --glass-bg: rgba(255, 255, 255, 0.08);
-            --glass-border: rgba(255, 255, 255, 0.16);
-        }
-
-        [data-testid="stAppViewContainer"] {
-            background: linear-gradient(120deg, #0f172a, #1e1b4b, #0b1022);
-            background-size: 250% 250%;
-            animation: gradientShift 16s ease infinite;
-        }
-
-        @keyframes gradientShift {
-            0% { background-position: 0% 50%; }
-            50% { background-position: 100% 50%; }
-            100% { background-position: 0% 50%; }
-        }
-
-        .hero-card {
-            border: 1px solid var(--glass-border);
-            background: linear-gradient(145deg, rgba(255,255,255,0.12), rgba(255,255,255,0.05));
-            border-radius: 16px;
-            padding: 1.1rem 1.2rem;
-            backdrop-filter: blur(8px);
-            box-shadow: 0 8px 22px rgba(0,0,0,0.25);
-            margin-bottom: 0.8rem;
-        }
-
-        .hero-title {
-            font-size: 1.6rem;
-            font-weight: 700;
-            letter-spacing: 0.2px;
-            background: linear-gradient(90deg, #ffffff, #a5b4fc, #67e8f9);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-
-        .hero-subtitle {
-            color: rgba(241, 245, 249, 0.9);
-            font-size: 0.95rem;
-            margin-top: 4px;
-        }
-
-        .metric-card {
-            border: 1px solid rgba(165, 180, 252, 0.35);
-            background: var(--glass-bg);
-            border-radius: 14px;
-            padding: 0.85rem 0.9rem;
-            box-shadow: 0 6px 16px rgba(0,0,0,0.2);
-            backdrop-filter: blur(6px);
-            transform: translateY(0);
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
-            animation: softPulse 3s ease-in-out infinite;
-        }
-
-        .metric-card:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 10px 24px rgba(0,0,0,0.28);
-        }
-
-        @keyframes softPulse {
-            0%, 100% { border-color: rgba(165, 180, 252, 0.30); }
-            50% { border-color: rgba(103, 232, 249, 0.45); }
-        }
-
-        .metric-title {
-            font-size: 0.82rem;
-            color: rgba(241, 245, 249, 0.78);
-            margin-bottom: 0.2rem;
-        }
-        .metric-value {
-            font-size: 1.18rem;
-            font-weight: 700;
-            color: #f8fafc;
-        }
-
-        .tag-pill {
-            display: inline-block;
-            padding: 0.22rem 0.6rem;
-            border-radius: 999px;
-            border: 1px solid rgba(255,255,255,0.22);
-            color: #e2e8f0;
-            font-size: 0.75rem;
-            margin-right: 0.35rem;
-            margin-bottom: 0.25rem;
-            background: rgba(255,255,255,0.06);
-        }
-
-        .section-anchor {
-            display: block;
-            padding-top: 0.35rem;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    load_custom_css()
 
 
-def _render_hero(title: str, subtitle: str, pills: list[str] | None = None) -> None:
-    pills_html = "".join([f'<span class="tag-pill">{item}</span>' for item in (pills or [])])
-    st.markdown(
-        f"""
-        <div class="hero-card">
-            <div class="hero-title">{title}</div>
-            <div class="hero-subtitle">{subtitle}</div>
-            <div style="margin-top: 8px;">{pills_html}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+def _render_hero(title: str, subtitle: str, pills: list[str] | None = None, icon: str = "💼") -> None:
+    page_header(title=title, subtitle=subtitle, icon=icon)
+    if pills:
+        st.caption(" | ".join(pills))
 
 
 def _render_metric_cards(metrics: list[tuple[str, str]]) -> None:
+    if not metrics:
+        return
+    icon_map = ["📊", "👥", "🏢", "💰", "📄", "✅", "📅"]
+    color_map = ["primary", "success", "info", "warning", "danger"]
     cols = st.columns(len(metrics))
-    for col, (title, value) in zip(cols, metrics):
-        col.markdown(
-            f"""
-            <div class="metric-card">
-                <div class="metric-title">{title}</div>
-                <div class="metric-value">{value}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+    for idx, (col, (title, value)) in enumerate(zip(cols, metrics)):
+        with col:
+            create_stat_card(
+                title=title,
+                value=value,
+                icon=icon_map[idx % len(icon_map)],
+                color=color_map[idx % len(color_map)],
+            )
 
 
 def _run_with_animation(label: str, operation: Callable[[], Any], steps: list[str] | None = None) -> Any:
     flow = steps or ["Validating input", "Processing backend workflow", "Preparing outputs"]
+    loading_slot = st.empty()
+    progress_slot = st.empty()
+    with loading_slot.container():
+        show_loading(f"{label}...")
     with st.status(label, expanded=True) as status:
         for idx, step in enumerate(flow):
+            pct = int(((idx + 1) / len(flow)) * 100)
+            with progress_slot.container():
+                show_progress(pct, step)
             status.write(f"⏳ {step}...")
             if idx < len(flow) - 1:
                 time.sleep(0.2)
         result = operation()
+        with progress_slot.container():
+            show_progress(100, "Completed")
         status.write("✅ Completed successfully.")
         status.update(label=f"{label} complete", state="complete", expanded=False)
+    loading_slot.empty()
+    progress_slot.empty()
     return result
 
 
@@ -208,7 +123,7 @@ def _render_output_downloads(output_paths: dict) -> None:
     for key, file_path in output_paths.items():
         path = Path(file_path)
         if not path.exists():
-            st.warning(f"{key}: file missing -> {path}")
+            show_alert(f"{key}: file missing -> {path}", "warning")
             continue
         st.download_button(
             label=f"Download {key} ({path.name})",
@@ -237,12 +152,32 @@ def _render_processing_summary(result: dict) -> None:
     if warnings:
         with st.expander("Validation Warnings"):
             for warning in warnings:
-                st.warning(warning)
+                show_alert(warning, "warning")
     if errors:
         with st.expander("Validation Errors"):
             for error in errors:
-                st.error(error)
+                show_alert(error, "error")
     _render_output_downloads(result.get("output_paths", {}))
+
+
+def _show_processing_exception(exc: Exception, strict_master: bool) -> None:
+    message = str(exc)
+    show_alert(message, "error")
+    if "Missing employee codes in active master data" in message:
+        with st.expander("How to resolve missing/inactive employee codes"):
+            st.markdown(
+                """
+                - Go to **Employee Management → Bulk Upload** and upload latest employee master.
+                - Ensure `emp_code` in master matches muster Excel codes (including leading zeros if used).
+                - Reactivate inactive employees from **Employee Management** if required.
+                - If you want automatic onboarding for missing codes, disable **Strict master validation** and retry.
+                """
+            )
+        if strict_master:
+            show_alert(
+                "Strict mode is ON. Disable it to auto-create missing employees from muster/preview where appropriate.",
+                "info",
+            )
 
 
 def _to_date(value: str) -> date:
@@ -286,22 +221,32 @@ def page_dashboard(selected_company: dict | None = None) -> None:
         "Payroll Dashboard",
         "Indian Labour Contractor Payroll Automation System",
         ["Employee Master", "Payroll Engine", "Compliance Reports", "Payment Guidance"],
+        icon="📊",
     )
 
     periods = discover_output_periods()
     contractor_name = (selected_company or {}).get("contractor_name", CONTRACTOR_NAME)
     client_name = (selected_company or {}).get("client_name", CLIENT_NAME)
-    _render_metric_cards([("Output Periods", str(len(periods))), ("Contractor", contractor_name), ("Client", client_name)])
+    latest_period = periods[0] if periods else "-"
+    cols = st.columns(4)
+    with cols[0]:
+        create_stat_card("Output Periods", str(len(periods)), "📁", "primary")
+    with cols[1]:
+        create_stat_card("Contractor", contractor_name, "🏢", "info")
+    with cols[2]:
+        create_stat_card("Client", client_name, "🤝", "success")
+    with cols[3]:
+        create_stat_card("Latest Period", latest_period, "📅", "warning")
 
     if periods:
         latest = periods[0]
-        st.info(f"Latest period detected: {latest}")
+        show_alert(f"Latest period detected: {latest}", "info")
         files = list_output_files(latest)
         st.write(f"Files generated in {latest}: {len(files)}")
         for file in files[:10]:
             st.write(f"- {file.name}")
     else:
-        st.warning("No payroll output periods available yet. Process payroll to generate reports.")
+        show_alert("No payroll output periods available yet. Process payroll to generate reports.", "warning")
 
 
 def page_employee_management(manager: EmployeeManager, company_id: int | None) -> None:
@@ -309,11 +254,12 @@ def page_employee_management(manager: EmployeeManager, company_id: int | None) -
         "Employee Management",
         "Add, edit, delete, filter, and bulk upload employee master records.",
         ["CRUD", "Bulk Upload", "Encrypted Fields"],
+        icon="👥",
     )
-    tabs = st.tabs(["View Employees", "Add Employee", "Edit Employee", "Delete Employee", "Bulk Upload"])
     if company_id is None:
-        st.warning("Select a company from sidebar first.")
+        show_alert("Select a company from sidebar first.", "warning")
         return
+    tabs = st.tabs(["👀 View Employees", "➕ Add Employee", "✏️ Edit Employee", "🗑️ Delete Employee", "📤 Bulk Upload"])
 
     with tabs[0]:
         st.subheader("View All Employees")
@@ -330,11 +276,19 @@ def page_employee_management(manager: EmployeeManager, company_id: int | None) -
         filters["company_id"] = company_id
         rows = manager.get_all_employees(filters=filters, active_only=active_only)
         if not rows:
-            st.info("No employees found.")
+            show_alert("No employees found.", "info")
         else:
             df = pd.DataFrame(rows)
             st.dataframe(df, use_container_width=True, hide_index=True)
             st.caption(f"Total rows: {len(df)}")
+            stat_cols = st.columns(3)
+            with stat_cols[0]:
+                create_stat_card("Employees", str(len(df)), "👥", "primary")
+            with stat_cols[1]:
+                active_count = int(df.get("is_active", pd.Series(dtype=int)).sum()) if "is_active" in df.columns else len(df)
+                create_stat_card("Active", str(active_count), "✅", "success")
+            with stat_cols[2]:
+                create_stat_card("Departments", str(df.get("department", pd.Series(dtype=str)).nunique()), "🏬", "info")
 
     with tabs[1]:
         st.subheader("Add New Employee")
@@ -367,16 +321,15 @@ def page_employee_management(manager: EmployeeManager, company_id: int | None) -
                         steps=["Validating employee fields", "Persisting to database", "Refreshing cache"],
                     )
                     st.balloons()
-                    st.toast("Employee added", icon="✅")
-                    st.success(f"Employee {payload['emp_code']} added successfully.")
+                    show_alert(f"Employee {payload['emp_code']} added successfully.", "success")
                 except Exception as exc:  # noqa: BLE001
-                    st.error(f"Failed to add employee: {exc}")
+                    show_alert(f"Failed to add employee: {exc}", "error")
 
     with tabs[2]:
         st.subheader("Edit Employee")
         all_rows = manager.get_all_employees(filters={"company_id": company_id}, active_only=False)
         if not all_rows:
-            st.info("No employees available for editing.")
+            show_alert("No employees available for editing.", "info")
         else:
             option_map = {f"{r['emp_code']} - {r['emp_name']}": r["emp_code"] for r in all_rows}
             selected_label = st.selectbox("Select Employee", options=list(option_map.keys()))
@@ -415,16 +368,15 @@ def page_employee_management(manager: EmployeeManager, company_id: int | None) -
                             lambda: manager.update_employee(emp_code, payload, raise_on_error=True),
                             steps=["Validating updated fields", "Applying update in database", "Writing audit log"],
                         )
-                        st.toast("Employee updated", icon="✅")
-                        st.success(f"Employee {emp_code} updated successfully.")
+                        show_alert(f"Employee {emp_code} updated successfully.", "success")
                     except Exception as exc:  # noqa: BLE001
-                        st.error(f"Failed to update employee: {exc}")
+                        show_alert(f"Failed to update employee: {exc}", "error")
 
     with tabs[3]:
         st.subheader("Delete Employee")
         all_rows = manager.get_all_employees(filters={"company_id": company_id}, active_only=False)
         if not all_rows:
-            st.info("No employees available for deletion.")
+            show_alert("No employees available for deletion.", "info")
         else:
             option_map = {f"{r['emp_code']} - {r['emp_name']}": r["emp_code"] for r in all_rows}
             selected_label = st.selectbox("Select Employee to Delete", options=list(option_map.keys()))
@@ -433,7 +385,7 @@ def page_employee_management(manager: EmployeeManager, company_id: int | None) -
             confirm_text = st.text_input("Type employee code to confirm delete")
             if st.button("Delete Employee", type="primary", use_container_width=True):
                 if confirm_text.strip() != emp_code:
-                    st.error("Confirmation code mismatch. Employee not deleted.")
+                    show_alert("Confirmation code mismatch. Employee not deleted.", "error")
                 else:
                     ok = _run_with_animation(
                         "Deleting employee",
@@ -442,17 +394,16 @@ def page_employee_management(manager: EmployeeManager, company_id: int | None) -
                     )
                     if ok:
                         mode = "soft deleted" if soft_delete else "hard deleted"
-                        st.toast("Employee deleted", icon="🗑️")
-                        st.success(f"Employee {emp_code} {mode}.")
+                        show_alert(f"Employee {emp_code} {mode}.", "success")
                     else:
-                        st.error("Employee not found.")
+                        show_alert("Employee not found.", "error")
 
     with tabs[4]:
         st.subheader("Bulk Upload Employees")
         st.caption("Upload employee master in xlsx/xls/csv/json/txt/pdf format.")
-        uploaded = st.file_uploader(
+        uploaded = file_upload_zone(
             "Upload employee master file",
-            type=["xlsx", "xls", "csv", "json", "txt", "pdf"],
+            ["xlsx", "xls", "csv", "json", "txt", "pdf"],
             key="emp_bulk_upload",
         )
         if uploaded and st.button("Process Bulk Upload", use_container_width=True):
@@ -463,10 +414,10 @@ def page_employee_management(manager: EmployeeManager, company_id: int | None) -
                     lambda: manager.bulk_upload_employees(file_path, company_id=company_id),
                     steps=["Saving uploaded file", "Validating and upserting records", "Creating summary response"],
                 )
-                st.success("Bulk upload processed.")
+                show_alert("Bulk upload processed.", "success")
                 st.json(result)
             except Exception as exc:  # noqa: BLE001
-                st.error(f"Bulk upload failed: {exc}")
+                _show_processing_exception(exc, strict_master=False)
 
 
 def page_payroll_processing(manager: EmployeeManager, company_id: int | None) -> None:
@@ -474,32 +425,37 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
         "Monthly Payroll Processing",
         "Run direct payroll or use preview -> approve -> finalize flow.",
         ["Validation", "Preview Mode", "Automated Reports", "ECR + NACH"],
+        icon="💸",
     )
-    preview_tab, direct_tab = st.tabs(["Preview -> Approve -> Finalize", "Direct Processing"])
+    preview_tab, direct_tab = st.tabs(["📄 Preview -> Approve -> Finalize", "⚡ Direct Processing"])
     if company_id is None:
-        st.warning("Select a company from sidebar first.")
+        show_alert("Select a company from sidebar first.", "warning")
         return
     strict_master = st.checkbox(
         "Strict master validation (disable auto-create missing employees)",
-        value=False,
+        value=True,
         help="When unchecked, payroll auto-creates missing employees from muster/preview data.",
     )
+    if strict_master:
+        show_alert("Strict mode enabled: missing employees must already exist in master.", "warning")
+    else:
+        show_alert("Smart mode enabled: missing employees can be auto-created during processing.", "info")
 
     with preview_tab:
         st.subheader("Create Editable Preview")
         c1, c2 = st.columns(2)
         month = c1.number_input("Month", min_value=1, max_value=12, value=datetime.now().month, step=1)
         year = c2.number_input("Year", min_value=2000, max_value=2100, value=datetime.now().year, step=1)
-        muster_upload = st.file_uploader("Upload Muster Roll (.xlsx)", type=["xlsx"], key="preview_muster_upload")
-        adjustments_upload = st.file_uploader(
+        muster_upload = file_upload_zone("Upload Muster Roll (.xlsx)", ["xlsx"], key="preview_muster_upload")
+        adjustments_upload = file_upload_zone(
             "Upload Adjustments (optional .xlsx/.csv)",
-            type=["xlsx", "csv"],
+            ["xlsx", "csv"],
             key="preview_adjustments_upload",
         )
 
         if st.button("Create Preview Workbook", use_container_width=True):
             if not muster_upload:
-                st.error("Please upload muster roll file.")
+                show_alert("Please upload muster roll file.", "error")
             else:
                 try:
                     muster_path = save_uploaded_file(muster_upload, INPUT_DIR / "muster_rolls", prefix="muster_ui_preview")
@@ -530,16 +486,15 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
                     st.session_state["ui_preview_month"] = int(month)
                     st.session_state["ui_preview_year"] = int(year)
                     st.session_state["ui_preview_company_id"] = int(company_id)
-                    st.toast("Preview workbook created", icon="📄")
-                    st.success("Preview workbook generated successfully.")
+                    show_alert("Preview workbook generated successfully.", "success")
                 except Exception as exc:  # noqa: BLE001
-                    st.error(f"Preview generation failed: {exc}")
+                    _show_processing_exception(exc, strict_master=strict_master)
 
         st.markdown("#### No Excel? Use Manual/CSV/JSON/TXT input")
         st.caption("Enter attendance manually or upload simple records with columns: emp_code, present_days, ot_hours.")
-        manual_file = st.file_uploader(
+        manual_file = file_upload_zone(
             "Upload manual records (.csv/.json/.txt)",
-            type=["csv", "json", "txt"],
+            ["csv", "json", "txt"],
             key="manual_records_upload",
         )
         if "manual_records_df" not in st.session_state:
@@ -562,7 +517,7 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
             try:
                 st.session_state["manual_records_df"] = _load_manual_records_file(manual_file)
             except Exception as exc:  # noqa: BLE001
-                st.error(f"Manual file parse failed: {exc}")
+                show_alert(f"Manual file parse failed: {exc}", "error")
 
         manual_df = st.data_editor(
             st.session_state["manual_records_df"],
@@ -595,13 +550,23 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
                 st.session_state["ui_preview_month"] = int(month)
                 st.session_state["ui_preview_year"] = int(year)
                 st.session_state["ui_preview_company_id"] = int(company_id)
-                st.success("Preview workbook generated from manual records.")
+                show_alert("Preview workbook generated from manual records.", "success")
             except Exception as exc:  # noqa: BLE001
-                st.error(f"Manual preview generation failed: {exc}")
+                _show_processing_exception(exc, strict_master=strict_master)
 
         preview_result = st.session_state.get("ui_preview_result")
         if preview_result:
             st.markdown("#### Preview Result")
+            show_alert("Review preview rows and approve before finalization.", "info")
+            muster_summary = preview_result.get("muster_summary", {}) if isinstance(preview_result, dict) else {}
+            if muster_summary:
+                summary_cols = st.columns(3)
+                with summary_cols[0]:
+                    create_stat_card("Employees Found", str(muster_summary.get("employee_count", 0)), "👥", "primary")
+                with summary_cols[1]:
+                    create_stat_card("Source Sl.No Range", str(muster_summary.get("source_slno_range", 0)), "🔢", "info")
+                with summary_cols[2]:
+                    create_stat_card("Sl.No Gaps Handled", str(muster_summary.get("slno_gaps_detected", 0)), "🛠️", "warning")
             st.json(preview_result)
             preview_path = Path(preview_result["preview_file"])
             if preview_path.exists():
@@ -653,15 +618,14 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
                         )
                         st.session_state["ui_final_result"] = final
                         st.balloons()
-                        st.toast("Payroll finalized", icon="✅")
-                        st.success("Payroll finalized from edited table.")
+                        show_alert("Payroll finalized from edited table.", "success")
                     except Exception as exc:  # noqa: BLE001
-                        st.error(f"Finalize failed: {exc}")
+                        _show_processing_exception(exc, strict_master=strict_master)
 
                 st.markdown("#### Or Upload External Edited Preview File")
-                edited_file_upload = st.file_uploader(
+                edited_file_upload = file_upload_zone(
                     "Upload edited preview workbook",
-                    type=["xlsx"],
+                    ["xlsx"],
                     key="preview_external_finalize_upload",
                 )
                 if edited_file_upload and st.button("Finalize From Uploaded Preview", use_container_width=True):
@@ -688,25 +652,30 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
                         )
                         st.session_state["ui_final_result"] = final
                         st.balloons()
-                        st.toast("Payroll finalized", icon="✅")
-                        st.success("Payroll finalized from uploaded preview.")
+                        show_alert("Payroll finalized from uploaded preview.", "success")
                     except Exception as exc:  # noqa: BLE001
-                        st.error(f"Finalize from upload failed: {exc}")
+                        _show_processing_exception(exc, strict_master=strict_master)
+            else:
+                show_alert("Preview file could not be found on disk. Please regenerate preview.", "warning")
 
     with direct_tab:
         st.subheader("Direct Process (no preview)")
         c1, c2 = st.columns(2)
         month_direct = c1.number_input("Month ", min_value=1, max_value=12, value=datetime.now().month, step=1)
         year_direct = c2.number_input("Year ", min_value=2000, max_value=2100, value=datetime.now().year, step=1)
-        muster_upload_direct = st.file_uploader("Upload Muster Roll (.xlsx) ", type=["xlsx"], key="direct_muster_upload")
-        adjustments_upload_direct = st.file_uploader(
-            "Upload Adjustments (optional .xlsx/.csv) ",
-            type=["xlsx", "csv"],
+        muster_upload_direct = file_upload_zone(
+            "Upload Muster Roll (.xlsx)",
+            ["xlsx"],
+            key="direct_muster_upload",
+        )
+        adjustments_upload_direct = file_upload_zone(
+            "Upload Adjustments (optional .xlsx/.csv)",
+            ["xlsx", "csv"],
             key="direct_adjustments_upload",
         )
         if st.button("Run Direct Payroll Processing", use_container_width=True):
             if not muster_upload_direct:
-                st.error("Please upload muster roll file.")
+                show_alert("Please upload muster roll file.", "error")
             else:
                 try:
                     muster_path = save_uploaded_file(
@@ -741,10 +710,9 @@ def page_payroll_processing(manager: EmployeeManager, company_id: int | None) ->
                     )
                     st.session_state["ui_final_result"] = result
                     st.balloons()
-                    st.toast("Direct payroll run completed", icon="✅")
-                    st.success("Direct payroll processing completed.")
+                    show_alert("Direct payroll processing completed.", "success")
                 except Exception as exc:  # noqa: BLE001
-                    st.error(f"Direct payroll processing failed: {exc}")
+                    _show_processing_exception(exc, strict_master=strict_master)
 
     final_result = st.session_state.get("ui_final_result")
     if final_result:
@@ -758,10 +726,11 @@ def page_reports(company_id: int | None) -> None:
         "Reports & Documents",
         "Browse monthly generated files and download reports instantly.",
         ["Excel", "PDF", "CSV"],
+        icon="📁",
     )
     periods = discover_output_periods()
     if not periods:
-        st.info("No output folders found. Process payroll first.")
+        show_alert("No output folders found. Process payroll first.", "info")
         return
 
     selected = st.selectbox("Select output period (YYYY_MM)", periods)
@@ -769,8 +738,16 @@ def page_reports(company_id: int | None) -> None:
     if company_id is not None:
         files = [f for f in files if f"company_{company_id}" in str(f)]
     if not files:
-        st.warning("No files in selected period.")
+        show_alert("No files in selected period.", "warning")
         return
+
+    cards = st.columns(3)
+    with cards[0]:
+        create_stat_card("Period", selected, "📅", "primary")
+    with cards[1]:
+        create_stat_card("Files Found", str(len(files)), "📄", "success")
+    with cards[2]:
+        create_stat_card("Company Filter", str(company_id or "All"), "🏢", "info")
 
     st.caption(f"Found {len(files)} files in output/{selected}")
     for file in files:
@@ -792,12 +769,20 @@ def page_payment_guidance(selected_company: dict | None) -> None:
         "Payment Guidance",
         "Step-by-step statutory and bank payment instructions (guidance only).",
         ["PF", "ESIC", "PT", "Bank Upload"],
+        icon="🏦",
     )
-    st.info("This system does not auto-pay challans. It only provides guidance and reports.")
+    show_alert("This system does not auto-pay challans. It only provides guidance and reports.", "info")
 
     pf_code = (selected_company or {}).get("pf_establishment_code", PF_ESTABLISHMENT_CODE)
     esic_code = (selected_company or {}).get("esic_employer_code", ESIC_EMPLOYER_CODE)
     pt_code = (selected_company or {}).get("pt_registration_no", PT_REGISTRATION_NO)
+    metrics = st.columns(3)
+    with metrics[0]:
+        create_stat_card("PF Code", pf_code or "N/A", "🧾", "primary")
+    with metrics[1]:
+        create_stat_card("ESIC Code", esic_code or "N/A", "🏥", "success")
+    with metrics[2]:
+        create_stat_card("PT No.", pt_code or "N/A", "📌", "warning")
     st.markdown(
         f"""
 ### PF Payment
@@ -839,6 +824,8 @@ def page_payment_guidance(selected_company: dict | None) -> None:
                 key=f"payment_instruction_download_{selected}",
                 use_container_width=True,
             )
+        else:
+            show_alert("No payment instruction file found for selected period.", "warning")
 
 
 def page_configuration(selected_company: dict | None) -> None:
@@ -846,6 +833,7 @@ def page_configuration(selected_company: dict | None) -> None:
         "Configuration Snapshot",
         "Read-only values loaded from current configuration.",
         ["Contractor", "Client", "Statutory Codes"],
+        icon="⚙️",
     )
     st.caption("Read-only configuration currently loaded by system.")
     config_payload = {
@@ -861,6 +849,13 @@ def page_configuration(selected_company: dict | None) -> None:
         "labour_ot_rate": (selected_company or {}).get("labour_ot_rate"),
         "supervisor_ot_rate": (selected_company or {}).get("supervisor_ot_rate"),
     }
+    cards = st.columns(3)
+    with cards[0]:
+        create_stat_card("Company", config_payload["company_name"], "🏢", "primary")
+    with cards[1]:
+        create_stat_card("Contractor", config_payload["contractor_name"], "👤", "info")
+    with cards[2]:
+        create_stat_card("Client", config_payload["client_name"], "🤝", "success")
     st.json(config_payload)
 
 
@@ -871,6 +866,7 @@ def run_app() -> None:
     company_manager = _bootstrap_company_manager()
 
     st.sidebar.title("Payroll Automation")
+    toggle_dark_mode()
     companies = company_manager.get_all_companies(active_only=True)
     selected_company_id: int | None = st.session_state.get("active_company_id")
 

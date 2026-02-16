@@ -72,9 +72,32 @@ class EmployeeManager:
             conn.commit()
 
     @staticmethod
+    def _normalize_emp_code(value: object) -> str:
+        code = str(value or "").strip()
+        if not code:
+            return ""
+        compact = code.replace(" ", "")
+        if re.fullmatch(r"\d+\.0+", compact):
+            return str(int(float(compact)))
+        return compact
+
+    @staticmethod
+    def _emp_code_aliases(emp_code: str) -> set[str]:
+        code = EmployeeManager._normalize_emp_code(emp_code)
+        if not code:
+            return set()
+        aliases = {code, code.upper()}
+        if code.isdigit():
+            number = str(int(code))
+            aliases.update({number, number.upper()})
+            for width in (4, 5, 6, 7, 8):
+                aliases.add(number.zfill(width))
+        return aliases
+
+    @staticmethod
     def _sanitize_input(emp_data: Dict[str, Any]) -> Dict[str, Any]:
         clean = dict(emp_data)
-        clean["emp_code"] = str(clean.get("emp_code", "")).strip()
+        clean["emp_code"] = EmployeeManager._normalize_emp_code(clean.get("emp_code", ""))
         clean["emp_name"] = str(clean.get("emp_name", "")).strip()
         clean["father_husband_name"] = str(clean.get("father_husband_name", "")).strip()
         clean["dob"] = parse_flexible_date(clean.get("dob"))
@@ -116,6 +139,27 @@ class EmployeeManager:
             row = conn.execute("SELECT 1 FROM employees WHERE emp_code = ?", (emp_code,)).fetchone()
             return row is not None
 
+    def _resolve_existing_emp_code(self, emp_code: str) -> str | None:
+        """Return existing canonical employee code using case-insensitive match."""
+        code = self._normalize_emp_code(emp_code)
+        if not code:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT emp_code FROM employees WHERE UPPER(emp_code) = UPPER(?) LIMIT 1",
+                (code,),
+            ).fetchone()
+            if row:
+                return str(row["emp_code"]).strip()
+
+            aliases = self._emp_code_aliases(code)
+            rows = conn.execute("SELECT emp_code FROM employees").fetchall()
+            for item in rows:
+                candidate = str(item["emp_code"]).strip()
+                if self._normalize_emp_code(candidate) in aliases or candidate in aliases:
+                    return candidate
+        return None
+
     def get_employee_codes(self, active_only: bool = False) -> List[str]:
         query = "SELECT emp_code FROM employees"
         params: tuple = ()
@@ -139,9 +183,33 @@ class EmployeeManager:
             return None
         return self._decrypt_sensitive(dict(row))
 
+    def get_employee_by_code_flexible(
+        self,
+        emp_code: str,
+        include_inactive: bool = True,
+        company_id: int | None = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Lookup employee by exact or alias code forms (leading zeros / .0)."""
+        canonical = self._resolve_existing_emp_code(emp_code)
+        if not canonical:
+            return None
+        employee = self.get_employee(canonical, include_inactive=include_inactive, company_id=company_id)
+        if employee is not None:
+            return employee
+        if company_id is not None:
+            return self.get_employee(canonical, include_inactive=include_inactive, company_id=None)
+        return None
+
     def add_employee(self, emp_data: Dict[str, Any], raise_on_error: bool = False) -> bool:
         """Add employee to master table."""
         clean = self._sanitize_input(emp_data)
+        existing_code_alias = self._resolve_existing_emp_code(clean.get("emp_code", ""))
+        if existing_code_alias and str(existing_code_alias).strip().upper() != str(clean.get("emp_code", "")).strip().upper():
+            if raise_on_error:
+                raise ValueError(
+                    f"emp_code '{clean.get('emp_code')}' maps to existing employee code '{existing_code_alias}'."
+                )
+            return False
         if clean.get("company_id") is None:
             clean["company_id"] = CompanyManager(self.db_path).get_default_company_id()
         valid, errors = validate_employee_data(clean, existing_codes=self.get_employee_codes(active_only=False))
@@ -204,8 +272,11 @@ class EmployeeManager:
         if clean.get("company_id") is None:
             clean["company_id"] = current.get("company_id") or CompanyManager(self.db_path).get_default_company_id()
 
-        existing_codes = set(self.get_employee_codes(active_only=False))
-        existing_codes.discard(emp_code)
+        existing_codes = {
+            code
+            for code in self.get_employee_codes(active_only=False)
+            if str(code).strip().upper() != str(emp_code).strip().upper()
+        }
         valid, errors = validate_employee_data(clean, existing_codes=existing_codes)
         if not valid:
             if raise_on_error:
@@ -331,6 +402,17 @@ class EmployeeManager:
             "department": "department",
             "company id": "company_id",
             "companyid": "company_id",
+            "sl no": "serial_no",
+            "sl.no": "serial_no",
+            "slno": "serial_no",
+            "serial no": "serial_no",
+            "serial number": "serial_no",
+            "sr no": "serial_no",
+            "sr.no": "serial_no",
+            "srno": "serial_no",
+            "s no": "serial_no",
+            "s.no": "serial_no",
+            "sno": "serial_no",
         }
 
         normalized_cols = {}
@@ -434,6 +516,57 @@ class EmployeeManager:
             text = file_path.read_text(encoding="utf-8", errors="ignore")
             return self._parse_text_table(text)
 
+    @staticmethod
+    def _normalize_bulk_serial_numbers(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+        """Normalize serial numbers to a contiguous 1..N sequence when present."""
+        serial_candidates = ["serial_no", "sl_no", "slno", "s_no", "sr_no", "serial", "sno"]
+        serial_col = next((col for col in serial_candidates if col in df.columns), None)
+        if not serial_col:
+            return df, []
+
+        out = df.copy()
+        warnings: list[str] = []
+        parsed = pd.to_numeric(out[serial_col], errors="coerce")
+        expected = pd.Series(range(1, len(out) + 1), dtype="float64")
+        actual = parsed.reset_index(drop=True)
+        if actual.isna().any() or not actual.equals(expected):
+            out[serial_col] = range(1, len(out) + 1)
+            warnings.append(
+                "Serial numbers were non-sequential/invalid in uploaded file and have been normalized to 1..N."
+            )
+        return out, warnings
+
+    @staticmethod
+    def _dedupe_bulk_records(df: pd.DataFrame) -> tuple[pd.DataFrame, list[str]]:
+        """Drop duplicate employee codes from upload payload (case-insensitive)."""
+        if "emp_code" not in df.columns:
+            return df, []
+
+        seen: set[str] = set()
+        keep_rows: list[int] = []
+        duplicate_codes: set[str] = set()
+        for idx, value in enumerate(df["emp_code"].tolist()):
+            code = str(value or "").strip()
+            if not code:
+                keep_rows.append(idx)
+                continue
+            key = code.upper()
+            if key in seen:
+                duplicate_codes.add(code)
+                continue
+            seen.add(key)
+            keep_rows.append(idx)
+
+        if len(keep_rows) == len(df):
+            return df, []
+
+        out = df.iloc[keep_rows].reset_index(drop=True)
+        warnings = [
+            "Duplicate employee codes found in upload and skipped: "
+            + ", ".join(sorted({str(code).strip() for code in duplicate_codes}))
+        ]
+        return out, warnings
+
     def bulk_upload_employees(self, excel_file: str | Path, company_id: int | None = None) -> Dict[str, Any]:
         """Bulk upload employee records from xlsx/xls/csv/json/txt/pdf."""
         file_path = Path(excel_file)
@@ -447,9 +580,14 @@ class EmployeeManager:
             return {"success": 0, "failed": 0, "errors": [f"Unable to parse file '{file_path.name}': {exc}"]}
 
         df = self._normalize_bulk_columns(df)
+        df, serial_warnings = self._normalize_bulk_serial_numbers(df)
+        df, dedupe_warnings = self._dedupe_bulk_records(df)
         records = df.to_dict(orient="records")
 
-        result = {"success": 0, "failed": 0, "errors": []}
+        result = {"success": 0, "failed": 0, "skipped": 0, "errors": [], "warnings": []}
+        result["warnings"].extend(serial_warnings)
+        result["warnings"].extend(dedupe_warnings)
+        seen_upload_codes: set[str] = set()
         for idx, record in enumerate(records, start=2):
             payload = {k: ("" if pd.isna(v) else v) for k, v in record.items()}
             if company_id is not None:
@@ -459,9 +597,16 @@ class EmployeeManager:
                 result["failed"] += 1
                 result["errors"].append(f"Row {idx}: Missing emp_code")
                 continue
+            upload_key = emp_code.upper()
+            if upload_key in seen_upload_codes:
+                result["skipped"] += 1
+                result["warnings"].append(f"Row {idx}: Duplicate emp_code '{emp_code}' skipped in upload file.")
+                continue
+            seen_upload_codes.add(upload_key)
             try:
-                if self.employee_exists(emp_code):
-                    ok = self.update_employee(emp_code, payload)
+                existing_code = self._resolve_existing_emp_code(emp_code)
+                if existing_code:
+                    ok = self.update_employee(existing_code, payload)
                 else:
                     ok = self.add_employee(payload)
                 if ok:
@@ -475,7 +620,12 @@ class EmployeeManager:
 
         log_audit(
             "employee_bulk_upload",
-            {"file": str(file_path), "success": result["success"], "failed": result["failed"]},
+            {
+                "file": str(file_path),
+                "success": result["success"],
+                "failed": result["failed"],
+                "skipped": result["skipped"],
+            },
         )
         return result
 

@@ -116,7 +116,12 @@ def handle_payroll_process(args: argparse.Namespace, manager: EmployeeManager) -
         print(f"python main.py finalize-payroll --preview-file \"{preview_result['preview_file']}\" --month {month} --year {year}")
         return 0
 
-    parsed_df = parse_muster_roll(args.muster_file, employee_manager=manager, company_id=args.company_id)
+    parsed_df = parse_muster_roll(
+        args.muster_file,
+        employee_manager=manager,
+        company_id=args.company_id,
+        allow_unknown_emp_codes=False,
+    )
     master_filters = {"company_id": args.company_id} if args.company_id is not None else None
     master_rows = manager.get_all_employees(active_only=True, filters=master_filters)
     master_codes = {r["emp_code"] for r in master_rows}

@@ -22,6 +22,26 @@ def _normalize_text(value: object) -> str:
     return "" if value is None else str(value).strip()
 
 
+def _normalize_emp_code_for_compare(value: object) -> str:
+    text = str(value or "").strip().upper()
+    if re.fullmatch(r"\d+\.0+", text):
+        return str(int(float(text)))
+    return text
+
+
+def _emp_code_aliases(value: object) -> set[str]:
+    code = _normalize_emp_code_for_compare(value)
+    if not code:
+        return set()
+    aliases = {code}
+    if code.isdigit():
+        number = str(int(code))
+        aliases.add(number)
+        for width in (4, 5, 6, 7, 8):
+            aliases.add(number.zfill(width))
+    return aliases
+
+
 def _parse_date(value: object) -> date | None:
     if value in (None, ""):
         return None
@@ -68,7 +88,8 @@ def normalize_designation(designation: str) -> str:
 def validate_employee_data(emp_data: dict, existing_codes: Iterable[str] | None = None) -> Tuple[bool, List[str]]:
     """Validate employee data before save."""
     errors: List[str] = []
-    existing_codes = set(existing_codes or [])
+    existing_codes = {str(code).strip() for code in (existing_codes or [])}
+    existing_codes_upper = {code.upper() for code in existing_codes if code}
 
     mandatory_fields = [
         "emp_code",
@@ -89,7 +110,7 @@ def validate_employee_data(emp_data: dict, existing_codes: Iterable[str] | None 
     emp_code = _normalize_text(emp_data.get("emp_code"))
     if emp_code and not EMP_CODE_RE.match(emp_code):
         errors.append("emp_code must be alphanumeric and may include _ or -")
-    if emp_code and emp_code in existing_codes:
+    if emp_code and emp_code.upper() in existing_codes_upper:
         errors.append(f"emp_code '{emp_code}' already exists")
 
     emp_name = _normalize_text(emp_data.get("emp_name"))
@@ -165,7 +186,17 @@ def validate_muster_roll(
         errors.append("Muster data is empty")
         return False, errors, warnings
 
-    duplicate_codes = df[df["emp_code"].astype(str).str.strip().duplicated(keep=False)]["emp_code"].tolist()
+    master_code_aliases: set[str] = set()
+    for code in master_emp_codes:
+        master_code_aliases.update(_emp_code_aliases(code))
+
+    master_designation_alias_map: dict[str, str] = {}
+    for code, designation in master_designation_map.items():
+        for alias in _emp_code_aliases(code):
+            master_designation_alias_map.setdefault(alias, designation)
+
+    normalized_codes = df["emp_code"].apply(_normalize_emp_code_for_compare)
+    duplicate_codes = df[normalized_codes.duplicated(keep=False)]["emp_code"].tolist()
     if duplicate_codes:
         errors.append(f"Duplicate employee codes in muster roll: {sorted(set(duplicate_codes))}")
 
@@ -175,7 +206,8 @@ def validate_muster_roll(
             errors.append("Found blank employee code")
             continue
 
-        if master_emp_codes and emp_code not in master_emp_codes:
+        code_aliases = _emp_code_aliases(emp_code)
+        if master_code_aliases and code_aliases.isdisjoint(master_code_aliases):
             errors.append(f"Employee code not found in master data: {emp_code}")
 
         try:
@@ -192,7 +224,7 @@ def validate_muster_roll(
         except (TypeError, ValueError):
             errors.append(f"ot_hours is not numeric for {emp_code}")
 
-        master_designation = master_designation_map.get(emp_code)
+        master_designation = next((master_designation_alias_map.get(alias) for alias in code_aliases if alias in master_designation_alias_map), None)
         muster_designation = str(row.get("designation", "")).strip()
         if master_designation and muster_designation and master_designation.lower() != muster_designation.lower():
             warnings.append(

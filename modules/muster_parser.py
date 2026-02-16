@@ -67,6 +67,34 @@ def _resolve_column(columns: List[str], candidates: Iterable[str]) -> str | None
     return None
 
 
+def _resolve_column_safe(columns: List[str], candidates: Iterable[str]) -> str | None:
+    """Resolve header match while avoiding fuzzy matches for short tokens.
+
+    Tokens like ``P`` and ``OT`` are very short and can accidentally match
+    unrelated columns (for example, ``EmployeeCode`` or ``Total``). This helper
+    keeps short candidates exact-match only, while still allowing partial match
+    for descriptive headers like ``Normal MD`` or ``OT Hrs``.
+    """
+    normalized_map = {_normalize_header(col): col for col in columns}
+    candidate_norms = [_normalize_header(candidate) for candidate in candidates]
+
+    # Exact header match first.
+    for candidate_norm in candidate_norms:
+        hit = normalized_map.get(candidate_norm)
+        if hit:
+            return hit
+
+    # Fuzzy match only for sufficiently descriptive candidates.
+    for col in columns:
+        col_norm = _normalize_header(col)
+        for candidate_norm in candidate_norms:
+            if len(candidate_norm) <= 2:
+                continue
+            if candidate_norm and candidate_norm in col_norm:
+                return col
+    return None
+
+
 def _attendance_value(cell: object) -> float:
     code = str(cell).strip().upper().replace(" ", "")
     if not code:
@@ -92,6 +120,11 @@ def _to_float(value: object) -> float:
         return 0.0
 
 
+def _has_value(value: object) -> bool:
+    text = str(value or "").strip()
+    return bool(text and text.lower() != "nan")
+
+
 def _is_number_like(value: object) -> bool:
     text = str(value).strip()
     if not text:
@@ -108,13 +141,38 @@ def _is_summary_row(emp_code: str, emp_name: str, department: str, slno: str) ->
     return bool(blob and _SUMMARY_RE.search(blob))
 
 
+def _normalize_name_key(value: object) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"\s+", " ", text)
+    return text
+
+
+def _to_int_or_none(value: object) -> int | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(float(text))
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _emp_code_candidates(value: object) -> list[str]:
     raw = str(value or "").strip()
     if not raw or raw.lower() == "nan":
         return []
 
-    candidates: list[str] = [raw]
     compact = raw.replace(" ", "")
+    if re.fullmatch(r"\d+\.0+", compact):
+        primary = str(int(float(compact)))
+    else:
+        primary = compact
+
+    candidates: list[str] = [primary]
+    if raw not in candidates:
+        candidates.append(raw)
     if compact not in candidates:
         candidates.append(compact)
 
@@ -126,9 +184,11 @@ def _emp_code_candidates(value: object) -> list[str]:
             candidates.append(number)
         if number.lstrip("0") and number.lstrip("0") not in candidates:
             candidates.append(number.lstrip("0"))
-        # Common employee code width in labour payroll sheets.
-        if number.zfill(6) not in candidates:
-            candidates.append(number.zfill(6))
+        # Common employee code widths in labour payroll sheets.
+        for width in (4, 5, 6, 7, 8):
+            padded = number.zfill(width)
+            if padded not in candidates:
+                candidates.append(padded)
     return candidates
 
 
@@ -136,10 +196,6 @@ def _resolve_emp_code(value: object, master_by_code: dict[str, dict]) -> str:
     candidates = _emp_code_candidates(value)
     if not candidates:
         return ""
-    for candidate in candidates:
-        if candidate in master_by_code:
-            canonical = str(master_by_code[candidate].get("emp_code", "")).strip()
-            return canonical or candidate
     return candidates[0]
 
 
@@ -155,10 +211,28 @@ def _looks_like_employee_code(emp_code: str) -> bool:
     return True
 
 
+def _is_suspicious_unknown_code(emp_code: str, slno_val: str) -> bool:
+    """Heuristic guard for non-employee numeric tokens leaking as emp codes."""
+    code = str(emp_code or "").strip()
+    if not code:
+        return True
+    digits_only = code.isdigit()
+    if digits_only and len(code) <= 3:
+        return True
+    if digits_only and slno_val and _is_number_like(slno_val):
+        try:
+            if int(float(code)) == int(float(slno_val)):
+                return True
+        except Exception:  # noqa: BLE001
+            return False
+    return False
+
+
 def parse_muster_roll(
     excel_file: str | Path,
     employee_manager: EmployeeManager | None = None,
     company_id: int | None = None,
+    allow_unknown_emp_codes: bool = False,
 ) -> pd.DataFrame:
     """Parse uploaded muster roll excel and return employee-wise attendance dataset."""
     file_path = Path(excel_file)
@@ -178,9 +252,38 @@ def parse_muster_roll(
     col_emp_name = _resolve_column(columns, ("EmployeeName", "Emp Name", "Name"))
     col_department = _resolve_column(columns, ("Department",))
     col_grade = _resolve_column(columns, ("Grade", "Designation", "NatureofWork", "Nature of Work"))
-    col_p = _resolve_column(columns, ("P", "Present"))
-    col_ot_hrs = _resolve_column(columns, ("OT Hrs", "OTHrs", "OTHours", "OT"))
-    col_payable_days = _resolve_column(columns, ("PayableDays", "Final Days", "FinalDays"))
+    col_normal_md = _resolve_column_safe(
+        columns,
+        (
+            "Normal MD",
+            "Normal M.D.",
+            "NormalMD",
+            "Normal Man Days",
+            "Normal Days",
+            "Man Days",
+            "Mandays",
+            "MD",
+        ),
+    )
+    col_p = _resolve_column_safe(columns, ("P", "Present"))
+    col_ot_hrs = _resolve_column_safe(
+        columns,
+        (
+            "OT Hrs",
+            "OT Hours",
+            "OTHrs",
+            "OTHours",
+            "Normal OT Hrs",
+            "Normal OT Hours",
+            "Overtime Hrs",
+            "Overtime Hours",
+            "OT",
+        ),
+    )
+    col_payable_days = _resolve_column_safe(
+        columns,
+        ("PayableDays", "Payable Days", "Final Days", "FinalDays", "Pay Days", "PayDays"),
+    )
 
     if not col_emp_code:
         raise ValueError("Could not map EmployeeCode column in muster file")
@@ -196,8 +299,9 @@ def parse_muster_roll(
 
     manager = employee_manager or get_manager()
     master_filters = {"company_id": int(company_id)} if company_id is not None else None
-    master_rows = manager.get_all_employees(filters=master_filters, active_only=False)
+    master_rows = manager.get_all_employees(filters=master_filters, active_only=True)
     master_by_code: Dict[str, dict] = {}
+    master_by_name: Dict[str, dict] = {}
     for row in master_rows:
         code = str(row["emp_code"]).strip()
         if not code:
@@ -205,14 +309,23 @@ def parse_muster_roll(
         master_by_code[code] = row
         for alt in _emp_code_candidates(code):
             master_by_code.setdefault(alt, row)
+        name_key = _normalize_name_key(row.get("emp_name"))
+        if name_key:
+            # Keep first mapping to avoid arbitrary reassignment in ambiguous names.
+            master_by_name.setdefault(name_key, row)
 
     parsed_rows: List[Dict[str, object]] = []
+    row_sequence = 0
     for _, row in data.iterrows():
         if _is_time_row(row, day_columns):
             continue
 
         slno_val = str(row.get(col_sl_no, "")).strip() if col_sl_no else ""
-        if slno_val:
+        source_sl_no = _to_int_or_none(slno_val)
+        if col_sl_no:
+            if not slno_val:
+                # Employee rows should carry serial numbers when column exists.
+                continue
             if _TIME_RE.match(slno_val):
                 continue
             # Most muster serial rows are numeric; non-numeric serial entries
@@ -225,26 +338,59 @@ def parse_muster_roll(
             continue
         emp_name_raw = str(row.get(col_emp_name, "")).strip() if col_emp_name else ""
         dept_raw = str(row.get(col_department, "")).strip() if col_department else ""
+        matched_master = master_by_code.get(emp_code)
+        if matched_master is None and emp_name_raw:
+            by_name = master_by_name.get(_normalize_name_key(emp_name_raw))
+            if by_name:
+                matched_master = by_name
         if _is_summary_row(emp_code, emp_name_raw, dept_raw, slno_val):
             continue
-        if emp_code not in master_by_code and not _looks_like_employee_code(emp_code):
+        if matched_master is None and not _looks_like_employee_code(emp_code):
             # Ignore non-employee text rows leaking into employee code column.
             continue
+        if matched_master is None and _is_suspicious_unknown_code(emp_code, slno_val):
+            continue
+        if matched_master is None and not emp_name_raw:
+            # Unknown employee code without name is almost always noise.
+            continue
+        if master_by_code and matched_master is None and not allow_unknown_emp_codes:
+            # For strict processing, skip unknown master codes to prevent inflated rows.
+            continue
+        if (
+            matched_master is None
+            and col_sl_no
+            and _is_number_like(slno_val)
+            and _is_number_like(emp_code)
+            and int(float(slno_val)) == int(float(emp_code))
+        ):
+            # Guardrail: avoid interpreting serial numbers as employee codes.
+            continue
 
-        master = master_by_code.get(emp_code, {})
+        master = matched_master or {}
 
-        present_days = _to_float(row.get(col_p)) if col_p else 0.0
-        if present_days <= 0:
+        # Prefer explicit "Normal MD" from uploaded muster if available.
+        present_days = 0.0
+        normal_md_cell = row.get(col_normal_md) if col_normal_md else None
+        used_normal_md = col_normal_md is not None and _has_value(normal_md_cell)
+        if used_normal_md:
+            present_days = _to_float(normal_md_cell)
+        elif col_p:
+            present_days = _to_float(row.get(col_p))
+
+        if present_days <= 0 and not used_normal_md:
             present_days = sum(_attendance_value(row.get(day)) for day in day_columns)
-        if present_days <= 0 and col_payable_days:
+        if present_days <= 0 and not used_normal_md and col_payable_days:
             present_days = _to_float(row.get(col_payable_days))
 
         ot_hours = _to_float(row.get(col_ot_hrs)) if col_ot_hrs else 0.0
         designation = str(master.get("designation") or row.get(col_grade, "")).strip()
         department = str(master.get("department") or row.get(col_department, "")).strip()
+        row_sequence += 1
 
         parsed_rows.append(
             {
+                "_row_sequence": row_sequence,
+                "_source_sl_no": source_sl_no,
                 "emp_code": emp_code,
                 "emp_name": str(master.get("emp_name") or emp_name_raw).strip(),
                 "father_husband_name": str(master.get("father_husband_name", "")).strip(),
@@ -268,5 +414,54 @@ def parse_muster_roll(
     if not parsed_rows:
         raise ValueError("No employee attendance rows detected in muster roll")
 
-    return pd.DataFrame(parsed_rows)
+    # Guardrail: keep one row per employee code to avoid double counting
+    # when source muster accidentally repeats employee blocks/pages.
+    deduped_by_code: Dict[str, Dict[str, object]] = {}
+    order: list[str] = []
+    for row in parsed_rows:
+        key = str(row.get("emp_code", "")).strip().upper()
+        if key not in deduped_by_code:
+            deduped_by_code[key] = dict(row)
+            order.append(key)
+            continue
+
+        existing = deduped_by_code[key]
+        existing["present_days"] = round(max(float(existing.get("present_days", 0) or 0), float(row.get("present_days", 0) or 0)), 2)
+        existing["ot_hours"] = round(max(float(existing.get("ot_hours", 0) or 0), float(row.get("ot_hours", 0) or 0)), 2)
+        existing_sl = _to_int_or_none(existing.get("_source_sl_no"))
+        new_sl = _to_int_or_none(row.get("_source_sl_no"))
+        if existing_sl is None and new_sl is not None:
+            existing["_source_sl_no"] = new_sl
+        elif existing_sl is not None and new_sl is not None and new_sl < existing_sl:
+            existing["_source_sl_no"] = new_sl
+        for text_field in ("emp_name", "father_husband_name", "designation", "grade", "department"):
+            if not str(existing.get(text_field, "")).strip() and str(row.get(text_field, "")).strip():
+                existing[text_field] = row.get(text_field, "")
+
+    final_rows = [deduped_by_code[key] for key in order]
+    for idx, item in enumerate(final_rows, start=1):
+        item["serial_no"] = idx
+        item.pop("_row_sequence", None)
+
+    result = pd.DataFrame(final_rows)
+    source_serials = sorted(
+        {
+            int(sl)
+            for sl in result.get("_source_sl_no", pd.Series(dtype="float64")).dropna().tolist()
+            if _to_int_or_none(sl) is not None
+        }
+    )
+    sl_range = (source_serials[-1] - source_serials[0] + 1) if source_serials else len(result)
+    sl_gaps = max(sl_range - len(source_serials), 0) if source_serials else 0
+    result.attrs["muster_summary"] = {
+        "employee_count": int(len(result)),
+        "source_slno_count": int(len(source_serials)),
+        "source_slno_min": int(source_serials[0]) if source_serials else None,
+        "source_slno_max": int(source_serials[-1]) if source_serials else None,
+        "source_slno_range": int(sl_range),
+        "slno_gaps_detected": int(sl_gaps),
+    }
+    if "_source_sl_no" in result.columns:
+        result = result.drop(columns=["_source_sl_no"])
+    return result
 
